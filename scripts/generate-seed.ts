@@ -60,7 +60,12 @@ function writeGeneral(range?: [number, number]): string {
   const generalRows = list.map((s) => {
     const id = `srv-${s.sno}`;
     const { general } = splitPatch(s);
-    const all = { id, ...general };
+    const all = {
+      id,
+      ...general,
+      soci_asset: s.sociAsset ? "Yes" : "No",
+      pci_asset: s.pciAsset ? "Yes" : "No",
+    };
     return generalCols.map((k) => {
       if (k === "affected_groups") return jsonb(all[k]);
       if (k === "created_at" || k === "updated_at") return now();
