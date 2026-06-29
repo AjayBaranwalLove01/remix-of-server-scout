@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { supabase } from "@/integrations/supabase/client";
 import type { LocationMaster, OsMaster } from "@/types/masters";
 
 interface MastersStore {
@@ -31,63 +30,141 @@ export const useMastersStore = create<MastersStore>((set, get) => ({
 
   fetchAll: async () => {
     set({ loading: true, error: null });
-    const [locRes, osRes] = await Promise.all([
-      (supabase.from as any)("locations_master").select("*").order("location_name"),
-      (supabase.from as any)("os_master").select("*").order("os_name"),
-    ]);
-    if (locRes.error || osRes.error) {
-      set({ loading: false, loaded: true, error: locRes.error?.message || osRes.error?.message || "Load failed" });
-      return;
+    try {
+      const [locRes, osRes] = await Promise.all([
+        fetch("/api/locations").then((r) => {
+          if (!r.ok) throw new Error("Failed to load locations");
+          return r.json();
+        }),
+        fetch("/api/os").then((r) => {
+          if (!r.ok) throw new Error("Failed to load OS catalog");
+          return r.json();
+        })
+      ]);
+
+      // Map SQL Server returned columns back to the camelCase naming used in the stores/types
+      const mappedLocations = locRes.map((l: any) => ({
+        id: String(l.ID),
+        location_name: l.Description,
+        status: l.Status,
+        created_at: l.created_at,
+        updated_at: l.updated_at
+      }));
+
+      const mappedOs = osRes.map((o: any) => ({
+        id: String(o.ID),
+        os_name: o.OSName,
+        os_support_end_date: o.OSSupportEnds,
+        status: o.Status,
+        created_at: o.created_at,
+        updated_at: o.updated_at
+      }));
+
+      set({
+        locations: mappedLocations,
+        os: mappedOs,
+        loaded: true,
+        loading: false,
+        error: null,
+      });
+    } catch (e: any) {
+      set({ loading: false, loaded: true, error: e.message || "Load failed" });
     }
-    set({
-      locations: (locRes.data ?? []) as LocationMaster[],
-      os: (osRes.data ?? []) as OsMaster[],
-      loaded: true,
-      loading: false,
-      error: null,
-    });
   },
 
   createLocation: async (input) => {
-    const { data, error } = await (supabase.from as any)("locations_master")
-      .insert({ location_name: input.location_name.trim(), status: input.status })
-      .select().single();
-    if (error) throw error;
+    const res = await fetch("/api/locations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error || "Failed to create location");
+    }
+    const raw = await res.json();
+    const data: LocationMaster = {
+      id: String(raw.ID),
+      location_name: raw.Description,
+      status: raw.Status
+    };
     set((s) => ({ locations: [...s.locations, data].sort((a, b) => a.location_name.localeCompare(b.location_name)) }));
   },
   updateLocation: async (id, patch) => {
-    const update: any = {};
-    if (patch.location_name !== undefined) update.location_name = patch.location_name.trim();
-    if (patch.status !== undefined) update.status = patch.status;
-    const { data, error } = await (supabase.from as any)("locations_master").update(update).eq("id", id).select().single();
-    if (error) throw error;
+    const res = await fetch(`/api/locations/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error || "Failed to update location");
+    }
+    const raw = await res.json();
+    const data: LocationMaster = {
+      id: String(raw.ID),
+      location_name: raw.Description,
+      status: raw.Status
+    };
     set((s) => ({ locations: s.locations.map((l) => (l.id === id ? data : l)) }));
   },
   deleteLocation: async (id) => {
-    const { error } = await (supabase.from as any)("locations_master").delete().eq("id", id);
-    if (error) throw error;
+    const res = await fetch(`/api/locations/${id}`, {
+      method: "DELETE"
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error || "Failed to delete location");
+    }
     set((s) => ({ locations: s.locations.filter((l) => l.id !== id) }));
   },
 
   createOs: async (input) => {
-    const { data, error } = await (supabase.from as any)("os_master")
-      .insert({ os_name: input.os_name.trim(), os_support_end_date: input.os_support_end_date, status: input.status })
-      .select().single();
-    if (error) throw error;
+    const res = await fetch("/api/os", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error || "Failed to create OS catalog entry");
+    }
+    const raw = await res.json();
+    const data: OsMaster = {
+      id: String(raw.ID),
+      os_name: raw.OSName,
+      os_support_end_date: raw.OSSupportEnds,
+      status: raw.Status
+    };
     set((s) => ({ os: [...s.os, data].sort((a, b) => a.os_name.localeCompare(b.os_name)) }));
   },
   updateOs: async (id, patch) => {
-    const update: any = {};
-    if (patch.os_name !== undefined) update.os_name = patch.os_name.trim();
-    if (patch.os_support_end_date !== undefined) update.os_support_end_date = patch.os_support_end_date;
-    if (patch.status !== undefined) update.status = patch.status;
-    const { data, error } = await (supabase.from as any)("os_master").update(update).eq("id", id).select().single();
-    if (error) throw error;
+    const res = await fetch(`/api/os/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error || "Failed to update OS catalog entry");
+    }
+    const raw = await res.json();
+    const data: OsMaster = {
+      id: String(raw.ID),
+      os_name: raw.OSName,
+      os_support_end_date: raw.OSSupportEnds,
+      status: raw.Status
+    };
     set((s) => ({ os: s.os.map((o) => (o.id === id ? data : o)) }));
   },
   deleteOs: async (id) => {
-    const { error } = await (supabase.from as any)("os_master").delete().eq("id", id);
-    if (error) throw error;
+    const res = await fetch(`/api/os/${id}`, {
+      method: "DELETE"
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error || "Failed to delete OS catalog entry");
+    }
     set((s) => ({ os: s.os.filter((o) => o.id !== id) }));
   },
 }));

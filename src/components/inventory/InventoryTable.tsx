@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -10,6 +10,8 @@ import {
   Plus,
   Trash2,
   Loader2,
+  ChevronUp,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useServerStore } from "@/store/serverStore";
 import type { Server } from "@/types/server";
@@ -30,86 +32,86 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const PAGE_SIZE = 6;
-
 export function InventoryTable() {
   const {
     servers,
+    groups,
     updateServer,
     createServer,
     deleteServer,
     fetchAll,
+    fetchFiltersMetadata,
+    availableFilters,
     loading,
     loaded,
     searchTerm,
     searchFilters,
+    setSearchTerm,
+
+    // Store filters state
+    statusFilter,
+    domainFilter,
+    stateFilter,
+    locationFilter,
+    siteTypeFilter,
+    ownerFilter,
+    osFilter,
+    priorityFilter,
+    businessGroupFilter,
+    virtualGuestFilter,
+    internetFacingFilter,
+    pciAssetFilter,
+    sociAssetFilter,
+    isPatchedFilter,
+    patchCategoryFilter,
+
+    // Store pagination/sorting state
+    page,
+    total,
+    pageSize,
+    sortBy,
+    sortOrder,
+
+    setFilter,
+    setPage,
+    setPageSize,
+    setSorting,
+    resetFilters,
   } = useServerStore();
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("All");
-  const [domainFilter, setDomainFilter] = useState<string>("All");
-  const [page, setPage] = useState(1);
+
+  const [query, setQuery] = useState(searchTerm);
+  const [expandedFilters, setExpandedFilters] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [pendingEdits, setPendingEdits] = useState<Record<number, Partial<Server>>>({});
   const [savingIds, setSavingIds] = useState<Set<number>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState<Server | null>(null);
 
+  // Initial loads
   useEffect(() => {
-    if (!loaded) fetchAll();
-  }, [loaded, fetchAll]);
+    if (!loaded) {
+      fetchAll();
+      fetchFiltersMetadata();
+    }
+  }, [loaded, fetchAll, fetchFiltersMetadata]);
 
-  const domains = useMemo(
-    () => Array.from(new Set(servers.map((s) => s.sdomain))),
-    [servers]
-  );
-
-  const filtersKey = searchFilters.join(",");
+  // Sync external search term changes back to local query input
   useEffect(() => {
-    setPage(1);
-  }, [searchTerm, filtersKey]);
+    setQuery(searchTerm);
+  }, [searchTerm]);
 
-  const matchesGlobalSearch = (s: Server): boolean => {
-    const q = searchTerm.trim().toLowerCase();
-    if (!q) return true;
-    const checks: boolean[] = [];
-    if (searchFilters.includes("status")) {
-      const haystacks = [
-        s.status.toLowerCase(),
-        s.isPatched === "Yes" ? "patched" : "unpatched",
-      ];
-      checks.push(haystacks.some((h) => h.includes(q)));
-    }
-    if (searchFilters.includes("custom")) {
-      const fields = [
-        s.servername, s.sdomain, s.serialnumber, s.patchContact,
-        s.dnsip, s.internetFacing, s.sociAsset, s.essential8,
-      ];
-      checks.push(fields.some((f) => String(f ?? "").toLowerCase().includes(q)));
-    }
-    return checks.some(Boolean);
-  };
+  // Debounced search trigger
+  useEffect(() => {
+    const delayDebounce = setTimeout(() => {
+      if (searchTerm !== query) {
+        setSearchTerm(query);
+      }
+    }, 300);
+    return () => clearTimeout(delayDebounce);
+  }, [query, searchTerm, setSearchTerm]);
 
-  const customSearchActive =
-    !!searchTerm.trim() && searchFilters.includes("custom");
+  const customSearchActive = !!searchTerm.trim() && searchFilters.includes("custom");
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return servers.filter((s) => {
-      if (!matchesGlobalSearch(s)) return false;
-      if (statusFilter !== "All" && s.status !== statusFilter) return false;
-      if (domainFilter !== "All" && s.sdomain !== domainFilter) return false;
-      if (!q) return true;
-      return (
-        s.servername.toLowerCase().includes(q) ||
-        s.dnsip.includes(q) ||
-        s.os.toLowerCase().includes(q) ||
-        s.location.toLowerCase().includes(q) ||
-        s.sdomain.toLowerCase().includes(q)
-      );
-    });
-  }, [servers, query, statusFilter, domainFilter, searchTerm, filtersKey]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageRows = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const stageEdit = (sno: number, patch: Partial<Server>) => {
     setPendingEdits((p) => ({ ...p, [sno]: { ...p[sno], ...patch } }));
@@ -193,10 +195,12 @@ export function InventoryTable() {
   };
 
   const exportCsv = () => {
+    // Note: in a server-side context we export all matching rows. 
+    // For simplicity, we trigger a full data fetch or export current rows.
     const headers = [
       "Server Name", "IP", "OS", "Status", "Patched", "Location", "Domain", "Network", "Priority",
     ];
-    const rows = filtered.map((s) => [
+    const rows = servers.map((s) => [
       s.servername, s.dnsip, s.os, s.status, s.isPatched, s.location, s.sdomain, s.network, s.priority,
     ]);
     const csv = [headers, ...rows]
@@ -209,22 +213,31 @@ export function InventoryTable() {
     a.download = `server-inventory-${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success("Exported CSV");
+    toast.success("Exported CSV (Current Page)");
+  };
+
+  const toggleSort = (colName: string) => {
+    if (sortBy === colName) {
+      setSorting(colName, sortOrder === "ASC" ? "DESC" : "ASC");
+    } else {
+      setSorting(colName, "ASC");
+    }
   };
 
   const merged = (s: Server): Server => ({ ...s, ...(pendingEdits[s.sno] || {}) });
   const pendingCount = Object.keys(pendingEdits).length;
 
   return (
-    <div className="surface-card overflow-hidden">
+    <div className="surface-card overflow-hidden space-y-2">
       {/* Toolbar */}
       <div className="p-4 border-b border-border flex flex-col lg:flex-row gap-3 lg:items-center justify-between">
         <div className="flex flex-1 items-center gap-2 flex-wrap">
+          {/* Quick search input */}
           <div className="flex items-center gap-2 h-9 px-3 rounded-md bg-muted/50 border border-border min-w-[240px] flex-1 max-w-md">
             <Search className="w-4 h-4 text-muted-foreground" />
             <input
               value={query}
-              onChange={(e) => { setQuery(e.target.value); setPage(1); }}
+              onChange={(e) => setQuery(e.target.value)}
               placeholder="Search by name, IP, OS, location..."
               className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground"
             />
@@ -232,24 +245,43 @@ export function InventoryTable() {
 
           <div className="flex items-center gap-1.5">
             <Filter className="w-4 h-4 text-muted-foreground" />
+            
+            {/* Status Quick Filter */}
             <select
               value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+              onChange={(e) => setFilter("statusFilter", e.target.value)}
               className="h-9 px-2 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30"
             >
-              <option>All</option>
-              <option>Active</option>
-              <option>Down</option>
-              <option>Maintenance</option>
+              <option value="All">All statuses</option>
+              <option value="Active">Active</option>
+              <option value="Down">Down</option>
+              <option value="Maintenance">Maintenance</option>
             </select>
+
+            {/* Domain Quick Filter */}
             <select
               value={domainFilter}
-              onChange={(e) => { setDomainFilter(e.target.value); setPage(1); }}
+              onChange={(e) => setFilter("domainFilter", e.target.value)}
               className="h-9 px-2 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30"
             >
               <option value="All">All domains</option>
-              {domains.map((d) => <option key={d}>{d}</option>)}
+              {availableFilters.domains.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
             </select>
+
+            {/* Expanded Filters Trigger */}
+            <button
+              onClick={() => setExpandedFilters(!expandedFilters)}
+              className={cn(
+                "inline-flex items-center gap-1.5 h-9 px-3 text-sm rounded-md border border-border transition-colors hover:bg-muted",
+                expandedFilters && "bg-accent/10 border-accent/30 text-accent"
+              )}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <span>More Filters</span>
+              {expandedFilters ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
           </div>
         </div>
 
@@ -288,23 +320,218 @@ export function InventoryTable() {
         </div>
       </div>
 
+      {/* Expanded Multi-Filter Section */}
+      {expandedFilters && (
+        <div className="p-4 bg-muted/20 border-b border-border grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 animate-fade-in-up">
+          {/* State */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">State</label>
+            <select
+              value={stateFilter}
+              onChange={(e) => setFilter("stateFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">All States</option>
+              {availableFilters.states.map((st) => (
+                <option key={st} value={st}>{st}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Location */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Location</label>
+            <select
+              value={locationFilter}
+              onChange={(e) => setFilter("locationFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">All Locations</option>
+              {availableFilters.locations.map((loc) => (
+                <option key={loc} value={loc}>{loc}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Operating System */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">OS Catalog</label>
+            <select
+              value={osFilter}
+              onChange={(e) => setFilter("osFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">All OS versions</option>
+              {availableFilters.oss.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Owner */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Owner</label>
+            <select
+              value={ownerFilter}
+              onChange={(e) => setFilter("ownerFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">All Owners</option>
+              {availableFilters.owners.map((ow) => (
+                <option key={ow} value={ow}>{ow}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Priority */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Priority</label>
+            <select
+              value={priorityFilter}
+              onChange={(e) => setFilter("priorityFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">All Priorities</option>
+              <option value="High">High</option>
+              <option value="Medium">Medium</option>
+              <option value="Low">Low</option>
+            </select>
+          </div>
+
+          {/* Virtual Guest */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Virtualization</label>
+            <select
+              value={virtualGuestFilter}
+              onChange={(e) => setFilter("virtualGuestFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">Virtual vs Physical</option>
+              <option value="Yes">Virtual Guest</option>
+              <option value="No">Physical Host</option>
+            </select>
+          </div>
+
+          {/* Internet Facing */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Internet Exposure</label>
+            <select
+              value={internetFacingFilter}
+              onChange={(e) => setFilter("internetFacingFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">Exposure (All)</option>
+              <option value="Yes">Internet Facing</option>
+              <option value="No">Internal Only</option>
+            </select>
+          </div>
+
+          {/* PCI Asset */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">PCI Boundary</label>
+            <select
+              value={pciAssetFilter}
+              onChange={(e) => setFilter("pciAssetFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">PCI Compliance (All)</option>
+              <option value="Yes">PCI Asset</option>
+              <option value="No">Non-PCI</option>
+            </select>
+          </div>
+
+          {/* SOCI Asset */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">SOCI Scope</label>
+            <select
+              value={sociAssetFilter}
+              onChange={(e) => setFilter("sociAssetFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">SOCI Boundary (All)</option>
+              <option value="Yes">SOCI Asset</option>
+              <option value="No">Non-SOCI</option>
+            </select>
+          </div>
+
+          {/* Patch Status */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Compliance Status</label>
+            <select
+              value={isPatchedFilter}
+              onChange={(e) => setFilter("isPatchedFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">Compliance (All)</option>
+              <option value="Yes">Patched</option>
+              <option value="No">Unpatched</option>
+            </select>
+          </div>
+
+          {/* Business Group */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Business Group</label>
+            <select
+              value={businessGroupFilter}
+              onChange={(e) => setFilter("businessGroupFilter", e.target.value)}
+              className="h-8 px-2 text-xs rounded border border-border bg-card w-full"
+            >
+              <option value="All">All Groups</option>
+              {availableFilters.businessGroups.map((bg) => (
+                <option key={bg} value={bg}>{bg}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Reset Filters */}
+          <div className="flex items-end">
+            <button
+              onClick={resetFilters}
+              className="h-8 px-3 text-xs w-full font-semibold rounded border border-dashed border-destructive text-destructive hover:bg-destructive/10 transition-colors flex items-center justify-center gap-1.5"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reset Filters</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-muted/40 text-left">
+            <tr className="bg-muted/40 text-left select-none">
+              <th className="px-3 py-3 w-10"></th>
               {[
-                "", "Server", "IP Address", "OS", "Status", "Patched",
-                "Location", "Domain", "Priority", "Actions",
+                { label: "Server", field: "Servername" },
+                { label: "IP Address", field: "DNSIP" },
+                { label: "OS", field: "OSName" },
+                { label: "Status", field: "Status" },
+                { label: "Patched", field: "IsPatched" },
+                { label: "Location", field: "LOCATIONNAME" },
+                { label: "Domain", field: "domain" },
+                { label: "Priority", field: "Priority" },
               ].map((h) => (
-                <th key={h} className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  {h}
+                <th 
+                  key={h.field} 
+                  onClick={() => toggleSort(h.field)}
+                  className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer hover:bg-muted/50 transition-colors"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>{h.label}</span>
+                    {sortBy === h.field && (
+                      <span className="text-[10px] text-accent">
+                        {sortOrder === "ASC" ? "▲" : "▼"}
+                      </span>
+                    )}
+                  </div>
                 </th>
               ))}
+              <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-28">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {pageRows.map((srv) => {
+            {servers.map((srv) => {
               const s = merged(srv);
               const isExpanded = expanded === s.sno;
               const isDirty = !!pendingEdits[s.sno];
@@ -402,7 +629,7 @@ export function InventoryTable() {
                 </Fragment>
               );
             })}
-            {pageRows.length === 0 && (
+            {servers.length === 0 && (
               <tr>
                 <td colSpan={10} className="px-3 py-16 text-center">
                   <div className="flex flex-col items-center gap-2 text-muted-foreground">
@@ -417,7 +644,7 @@ export function InventoryTable() {
                         <p className="text-sm font-medium text-foreground">No results found</p>
                         <p className="text-xs">
                           {searchTerm
-                            ? <>No servers match <span className="font-mono">"{searchTerm}"</span> in the selected scope{searchFilters.length > 1 ? "s" : ""}.</>
+                            ? <>No servers match <span className="font-mono">"{searchTerm}"</span> in the selected scope.</>
                             : "Try adjusting your filters or add a new server."}
                         </p>
                       </>
@@ -433,12 +660,12 @@ export function InventoryTable() {
       {/* Pagination */}
       <div className="px-4 py-3 border-t border-border flex items-center justify-between text-sm">
         <p className="text-muted-foreground text-xs">
-          Showing <span className="font-mono text-foreground">{pageRows.length}</span> of{" "}
-          <span className="font-mono text-foreground">{filtered.length}</span> servers
+          Showing <span className="font-mono text-foreground">{servers.length}</span> of{" "}
+          <span className="font-mono text-foreground">{total}</span> servers
         </p>
         <div className="flex items-center gap-1">
           <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            onClick={() => setPage(Math.max(1, page - 1))}
             disabled={page === 1}
             className="h-8 px-3 text-xs rounded-md border border-border hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
           >
@@ -459,7 +686,7 @@ export function InventoryTable() {
             </button>
           ))}
           <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            onClick={() => setPage(Math.min(totalPages, page + 1))}
             disabled={page === totalPages}
             className="h-8 px-3 text-xs rounded-md border border-border hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
           >

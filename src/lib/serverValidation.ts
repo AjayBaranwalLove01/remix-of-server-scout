@@ -39,14 +39,14 @@ export function validateServer(
 
   if (next.location !== undefined && next.location.trim()) {
     const exists = ctx.locations.some(
-      (l) => l.status === "Active" && l.location_name.toLowerCase() === next.location!.trim().toLowerCase()
+      (l) => (!l.status || l.status === "Active") && l.location_name.toLowerCase() === next.location!.trim().toLowerCase()
     );
     if (!exists) errors.location = "Location must be selected from the Locations master.";
   }
 
   if (next.os !== undefined && next.os.trim()) {
     const exists = ctx.os.some(
-      (o) => o.status === "Active" && o.os_name.toLowerCase() === next.os!.trim().toLowerCase()
+      (o) => (!o.status || o.status === "Active") && o.os_name.toLowerCase() === next.os!.trim().toLowerCase()
     );
     if (!exists) errors.os = "OS must be selected from the OS master.";
   }

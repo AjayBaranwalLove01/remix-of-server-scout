@@ -76,8 +76,8 @@ export function ServerDetailPanel({
   useEffect(() => { if (!mastersLoaded) fetchMasters(); }, [mastersLoaded, fetchMasters]);
 
   const primaryGroup = groups.find((g) => g.id === server.primaryGroupId);
-  const activeLocations = locations.filter((l) => l.status === "Active" || l.location_name === server.location);
-  const activeOs = osList.filter((o) => o.status === "Active" || o.os_name === server.os);
+  const activeLocations = locations.filter((l) => !l.status || l.status === "Active" || l.location_name === server.location);
+  const activeOs = osList.filter((o) => !o.status || o.status === "Active" || o.os_name === server.os);
 
   const errors = useMemo(
     () => validateServer(server, { servers: allServers, locations, os: osList, selfId: server.id }),
@@ -245,11 +245,7 @@ export function ServerDetailPanel({
             <InlineToggle value={server.isPatched} onSave={(v) => stageEdit({ isPatched: v })} />
           </Field>
           <Field label="Essential 8">
-            <InlineSelect
-              value={server.essential8}
-              onSave={(v) => stageEdit({ essential8: v as Server["essential8"] })}
-              options={["ML0", "ML1", "ML2", "ML3"].map((o) => ({ value: o, label: o }))}
-            />
+            <InlineToggle value={server.essential8} onSave={(v) => stageEdit({ essential8: v })} />
           </Field>
         </div>
       </Section>
@@ -266,7 +262,7 @@ export function ServerDetailPanel({
           <Field label="Patch Sequence">
             <InlineText value={server.patchSequence} onSave={(v) => stageEdit({ patchSequence: v })} />
           </Field>
-          <Field label="Day">
+          <Field label="Maintenance Day">
             <InlineSelect
               value={server.day}
               onSave={(v) => stageEdit({ day: v })}
@@ -274,7 +270,7 @@ export function ServerDetailPanel({
                 .map((d) => ({ value: d, label: d }))}
             />
           </Field>
-          <Field label="Time">
+          <Field label="Maintenance Time">
             <InlineText type="time" value={server.time} onSave={(v) => stageEdit({ time: v })} />
           </Field>
           <Field label="Build Engineer">

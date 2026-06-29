@@ -1,13 +1,23 @@
 import { create } from "zustand";
-import { supabase } from "@/integrations/supabase/client";
-import { rowToServer, rowToGroup, splitPatch, emptyServer } from "@/lib/serverMapper";
+import { rowToServer, rowToGroup, emptyServer } from "@/lib/serverMapper";
 import type { Server, SupportGroup } from "@/types/server";
 
-const SERVERS_VIEW = "servers";
-const GENERAL_TABLE = "server_general_details";
-const SUMMARY_TABLE = "server_summary";
-
 export type SearchFilter = "status" | "custom";
+
+export interface DashboardCounts {
+  total: number;
+  active: number;
+  down: number;
+  maintenance: number;
+  decommissioned: number;
+  patched: number;
+  critical: number;
+  internetFacing: number;
+  pciAssets: number;
+  sociAssets: number;
+  virtualServers: number;
+  physicalServers: number;
+}
 
 interface ServerStore {
   servers: Server[];
@@ -16,20 +26,66 @@ interface ServerStore {
   loaded: boolean;
   error: string | null;
 
+  // Search & Filter state
   searchTerm: string;
   searchFilters: SearchFilter[];
+  statusFilter: string;
+  domainFilter: string;
+  stateFilter: string;
+  locationFilter: string;
+  siteTypeFilter: string;
+  ownerFilter: string;
+  osFilter: string;
+  priorityFilter: string;
+  businessGroupFilter: string;
+  virtualGuestFilter: string;
+  internetFacingFilter: string;
+  pciAssetFilter: string;
+  sociAssetFilter: string;
+  isPatchedFilter: string;
+  patchCategoryFilter: string;
 
+  // Pagination & Sorting state
+  page: number;
+  pageSize: number;
+  total: number;
+  sortBy: string;
+  sortOrder: "ASC" | "DESC";
+
+  // Dynamic filter lists fetched from server
+  availableFilters: {
+    states: string[];
+    locations: string[];
+    owners: string[];
+    oss: string[];
+    domains: string[];
+    businessGroups: string[];
+  };
+
+  // Dashboard Stats
+  dashboardStats: DashboardCounts | null;
+  loadingStats: boolean;
+
+  // Actions
   setSearchTerm: (term: string) => void;
   toggleSearchFilter: (filter: SearchFilter) => void;
   setSearchFilters: (filters: SearchFilter[]) => void;
   resetSearch: () => void;
 
+  setFilter: (key: string, value: string) => void;
+  setPage: (page: number) => void;
+  setPageSize: (size: number) => void;
+  setSorting: (sortBy: string, sortOrder: "ASC" | "DESC") => void;
+  resetFilters: () => void;
+
   fetchAll: () => Promise<void>;
+  fetchFiltersMetadata: () => Promise<void>;
+  fetchDashboardStats: () => Promise<void>;
   refreshOne: (id: string) => Promise<void>;
-  updateServer: (sno: number, patch: Partial<Server>) => Promise<void>;
+  updateServer: (sdbID: number, patch: Partial<Server>) => Promise<void>;
   bulkUpdate: (updates: Record<number, Partial<Server>>) => Promise<void>;
   createServer: () => Promise<Server | null>;
-  deleteServer: (sno: number) => Promise<void>;
+  deleteServer: (sdbID: number) => Promise<void>;
 }
 
 export const useServerStore = create<ServerStore>((set, get) => ({
@@ -39,81 +95,245 @@ export const useServerStore = create<ServerStore>((set, get) => ({
   loaded: false,
   error: null,
 
+  // Search & Filter defaults
   searchTerm: "",
   searchFilters: ["status", "custom"],
-  setSearchTerm: (term) => set({ searchTerm: term }),
-  setSearchFilters: (filters) => set({ searchFilters: filters }),
+  statusFilter: "All",
+  domainFilter: "All",
+  stateFilter: "All",
+  locationFilter: "All",
+  siteTypeFilter: "All",
+  ownerFilter: "All",
+  osFilter: "All",
+  priorityFilter: "All",
+  businessGroupFilter: "All",
+  virtualGuestFilter: "All",
+  internetFacingFilter: "All",
+  pciAssetFilter: "All",
+  sociAssetFilter: "All",
+  isPatchedFilter: "All",
+  patchCategoryFilter: "All",
+
+  // Pagination & Sorting defaults
+  page: 1,
+  pageSize: 6,
+  total: 0,
+  sortBy: "Servername",
+  sortOrder: "ASC",
+
+  availableFilters: {
+    states: [],
+    locations: [],
+    owners: [],
+    oss: [],
+    domains: [],
+    businessGroups: []
+  },
+
+  dashboardStats: null,
+  loadingStats: false,
+
+  setSearchTerm: (term) => {
+    set({ searchTerm: term, page: 1 });
+    get().fetchAll();
+  },
+  
+  setSearchFilters: (filters) => {
+    set({ searchFilters: filters, page: 1 });
+    get().fetchAll();
+  },
+
   toggleSearchFilter: (filter) =>
     set((s) => {
       const has = s.searchFilters.includes(filter);
       const next = has
         ? s.searchFilters.filter((f) => f !== filter)
         : [...s.searchFilters, filter];
-      return { searchFilters: next.length ? next : s.searchFilters };
+      const result = next.length ? next : s.searchFilters;
+      setTimeout(() => get().fetchAll(), 0);
+      return { searchFilters: result, page: 1 };
     }),
-  resetSearch: () => set({ searchTerm: "" }),
+
+  resetSearch: () => {
+    set({ searchTerm: "", page: 1 });
+    get().fetchAll();
+  },
+
+  setFilter: (key, value) => {
+    set({ [key]: value, page: 1 });
+    get().fetchAll();
+  },
+
+  setPage: (page) => {
+    set({ page });
+    get().fetchAll();
+  },
+
+  setPageSize: (size) => {
+    set({ pageSize: size, page: 1 });
+    get().fetchAll();
+  },
+
+  setSorting: (sortBy, sortOrder) => {
+    set({ sortBy, sortOrder, page: 1 });
+    get().fetchAll();
+  },
+
+  resetFilters: () => {
+    set({
+      statusFilter: "All",
+      domainFilter: "All",
+      stateFilter: "All",
+      locationFilter: "All",
+      siteTypeFilter: "All",
+      ownerFilter: "All",
+      osFilter: "All",
+      priorityFilter: "All",
+      businessGroupFilter: "All",
+      virtualGuestFilter: "All",
+      internetFacingFilter: "All",
+      pciAssetFilter: "All",
+      sociAssetFilter: "All",
+      isPatchedFilter: "All",
+      patchCategoryFilter: "All",
+      searchTerm: "",
+      page: 1
+    });
+    get().fetchAll();
+  },
 
   fetchAll: async () => {
     set({ loading: true, error: null });
-    const [serversRes, groupsRes] = await Promise.all([
-      (supabase.from as any)(SERVERS_VIEW).select("*").order("server_name", { ascending: true }),
-      supabase.from("support_groups").select("*").order("name", { ascending: true }),
-    ]);
-    if (serversRes.error || groupsRes.error) {
+    const s = get();
+    
+    // Construct query parameters for pagination, sorting, search, and all filters
+    const queryParams = new URLSearchParams({
+      page: String(s.page),
+      pageSize: String(s.pageSize),
+      search: s.searchTerm,
+      sortBy: s.sortBy,
+      sortOrder: s.sortOrder,
+      status: s.statusFilter,
+      domain: s.domainFilter,
+      state: s.stateFilter,
+      location: s.locationFilter,
+      siteType: s.siteTypeFilter,
+      owner: s.ownerFilter,
+      os: s.osFilter,
+      priority: s.priorityFilter,
+      businessGroup: s.businessGroupFilter,
+      virtualGuest: s.virtualGuestFilter,
+      internetFacing: s.internetFacingFilter,
+      pciAsset: s.pciAssetFilter,
+      sociAsset: s.sociAssetFilter,
+      isPatched: s.isPatchedFilter,
+      patchCategory: s.patchCategoryFilter
+    });
+
+    try {
+      const [srvRes, grpRes] = await Promise.all([
+        fetch(`/api/servers?${queryParams}`).then((r) => {
+          if (!r.ok) throw new Error("Failed to load servers list");
+          return r.json();
+        }),
+        fetch("/api/groups").then((r) => {
+          if (!r.ok) throw new Error("Failed to load support groups");
+          return r.json();
+        })
+      ]);
+
+      set({
+        servers: (srvRes.servers ?? []).map(rowToServer),
+        total: srvRes.total ?? 0,
+        groups: (grpRes ?? []).map(rowToGroup),
+        loading: false,
+        loaded: true,
+        error: null
+      });
+    } catch (e: any) {
       set({
         loading: false,
         loaded: true,
-        error: serversRes.error?.message || groupsRes.error?.message || "Load failed",
+        error: e.message || "Failed to sync inventory database."
       });
-      return;
     }
-    set({
-      servers: (serversRes.data ?? []).map(rowToServer),
-      groups: (groupsRes.data ?? []).map(rowToGroup),
-      loading: false,
-      loaded: true,
-      error: null,
-    });
+  },
+
+  fetchFiltersMetadata: async () => {
+    try {
+      const r = await fetch("/api/servers/filters");
+      if (!r.ok) throw new Error("Failed to load filter headers metadata");
+      const data = await r.json();
+      set({
+        availableFilters: {
+          states: data.states || [],
+          locations: data.locations || [],
+          owners: data.owners || [],
+          oss: data.oss || [],
+          domains: data.domains || [],
+          businessGroups: data.businessGroups || []
+        }
+      });
+    } catch (e) {
+      console.error("Failed to load filter metadata:", e);
+    }
+  },
+
+  fetchDashboardStats: async () => {
+    set({ loadingStats: true });
+    try {
+      const r = await fetch("/api/dashboard/stats");
+      if (!r.ok) throw new Error("Failed to load dashboard metrics");
+      const data = await r.json();
+      set({
+        dashboardStats: data,
+        loadingStats: false
+      });
+    } catch (e) {
+      console.error("Dashboard stats failed to fetch:", e);
+      set({ loadingStats: false });
+    }
   },
 
   refreshOne: async (id) => {
-    const { data } = await (supabase.from as any)(SERVERS_VIEW).select("*").eq("id", id).maybeSingle();
-    if (!data) return;
-    const updated = rowToServer(data);
-    set((s) => ({ servers: s.servers.map((srv) => (srv.id === id ? updated : srv)) }));
+    try {
+      const r = await fetch(`/api/servers/${id}`);
+      if (!r.ok) return;
+      const data = await r.json();
+      const updated = rowToServer(data);
+      set((s) => ({
+        servers: s.servers.map((srv) => (String(srv.id) === String(id) ? updated : srv))
+      }));
+    } catch (e) {
+      console.error(`Failed to refresh server ${id}:`, e);
+    }
   },
 
-  updateServer: async (sno, patch) => {
-    const existing = get().servers.find((srv) => srv.sno === sno);
+  updateServer: async (sdbID, patch) => {
+    // Optimistically update
+    const existing = get().servers.find((srv) => srv.sno === sdbID);
     if (!existing || !existing.id) throw new Error("Server not found");
 
-    const { general, summary } = splitPatch(patch);
-    const oldName = existing.servername;
-    const newName = (general.servername as string | undefined) ?? oldName;
+    const res = await fetch(`/api/servers/${existing.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
 
-    // 1) Update summary first (keyed by old servername) if there are summary fields
-    if (Object.keys(summary).length) {
-      // upsert in case row was missing
-      const { error: sumErr } = await (supabase.from as any)(SUMMARY_TABLE)
-        .upsert({ servername: oldName, ...summary }, { onConflict: "servername" });
-      if (sumErr) { set({ error: sumErr.message }); throw sumErr; }
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error || "Update failed on server");
     }
 
-    // 2) If servername is changing, propagate to summary
-    if (general.servername && newName !== oldName) {
-      const { error: renameErr } = await (supabase.from as any)(SUMMARY_TABLE)
-        .update({ servername: newName }).eq("servername", oldName);
-      if (renameErr) { set({ error: renameErr.message }); throw renameErr; }
-    }
-
-    // 3) Update general details
-    if (Object.keys(general).length) {
-      const { error: genErr } = await (supabase.from as any)(GENERAL_TABLE)
-        .update(general).eq("id", existing.id);
-      if (genErr) { set({ error: genErr.message }); throw genErr; }
-    }
-
-    await get().refreshOne(existing.id);
+    const data = await res.json();
+    const updated = rowToServer(data);
+    
+    set((s) => ({
+      servers: s.servers.map((srv) => (srv.sno === sdbID ? updated : srv))
+    }));
+    
+    // Refresh dashboard stats after database changes
+    get().fetchDashboardStats();
   },
 
   bulkUpdate: async (updates) => {
@@ -122,40 +342,52 @@ export const useServerStore = create<ServerStore>((set, get) => ({
   },
 
   createServer: async () => {
-    const draft = emptyServer(Date.now());
-    // Pick a unique placeholder servername
-    let candidate = "NEW-SERVER";
-    const lower = new Set(get().servers.map((s) => s.servername.toLowerCase()));
-    let i = 1;
-    while (lower.has(candidate.toLowerCase())) {
-      candidate = `NEW-SERVER-${i++}`;
+    const draft = emptyServer(0);
+    const res = await fetch("/api/servers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(draft)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error || "Creation failed");
     }
-    draft.servername = candidate;
 
-    const { general, summary } = splitPatch(draft);
-    general.id = draft.id;
-    general.servername = candidate;
+    const data = await res.json();
+    const created = rowToServer(data);
 
-    const { error: gErr } = await (supabase.from as any)(GENERAL_TABLE).insert(general);
-    if (gErr) { set({ error: gErr.message }); throw gErr; }
-
-    const { error: sErr } = await (supabase.from as any)(SUMMARY_TABLE)
-      .insert({ servername: candidate, ...summary });
-    if (sErr) { set({ error: sErr.message }); throw sErr; }
-
-    const { data: viewRow } = await (supabase.from as any)(SERVERS_VIEW)
-      .select("*").eq("id", draft.id).maybeSingle();
-    const created = viewRow ? rowToServer(viewRow) : draft;
-    set((s) => ({ servers: [created, ...s.servers] }));
+    set((s) => ({
+      servers: [created, ...s.servers],
+      total: s.total + 1
+    }));
+    
+    // Refresh dashboard stats and inventory
+    get().fetchDashboardStats();
+    get().fetchAll();
+    
     return created;
   },
 
-  deleteServer: async (sno) => {
-    const existing = get().servers.find((srv) => srv.sno === sno);
+  deleteServer: async (sdbID) => {
+    const existing = get().servers.find((srv) => srv.sno === sdbID);
     if (!existing || !existing.id) throw new Error("Server not found");
-    const { error: gErr } = await (supabase.from as any)(GENERAL_TABLE).delete().eq("id", existing.id);
-    if (gErr) { set({ error: gErr.message }); throw gErr; }
-    await (supabase.from as any)(SUMMARY_TABLE).delete().eq("servername", existing.servername);
-    set((s) => ({ servers: s.servers.filter((srv) => srv.sno !== sno) }));
-  },
+
+    const res = await fetch(`/api/servers/${existing.id}`, {
+      method: "DELETE"
+    });
+
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error || "Deletion failed");
+    }
+
+    set((s) => ({
+      servers: s.servers.filter((srv) => srv.sno !== sdbID),
+      total: Math.max(0, s.total - 1)
+    }));
+
+    get().fetchDashboardStats();
+    get().fetchAll();
+  }
 }));

@@ -35,7 +35,7 @@ export interface Server {
   network: string;
   sdomain: string;
   isPatched: YesNo;
-  essential8: Essential8;
+  essential8: YesNo;
 
   // Summary
   buildDate: string;
