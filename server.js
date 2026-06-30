@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import db from './db.js';
 
 dotenv.config();
@@ -745,6 +747,24 @@ app.get('/api/dashboard/stats', async (req, res) => {
   } catch (err) {
     handleError(res, err, 'Failed to fetch dashboard metrics.');
   }
+});
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Serve built static frontend files in production/offline
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// Catch-all route to serve the React application
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    return next();
+  }
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'), (err) => {
+    if (err) {
+      res.status(404).send("Frontend assets not built. Run 'npm run build' on a machine with internet first.");
+    }
+  });
 });
 
 // Start listening and ensure schema integrity
