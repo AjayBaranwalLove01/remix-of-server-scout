@@ -1,0 +1,53 @@
+version: 1
+
+# 1. Create Users Organizational Unit (OU)
+dn: ou=users,dc=scout,dc=local
+objectclass: organizationalUnit
+objectclass: top
+ou: users
+
+# 2. Create Groups Organizational Unit (OU)
+dn: ou=groups,dc=scout,dc=local
+objectclass: organizationalUnit
+objectclass: top
+ou: groups
+
+# 3. Create Admin User (adminuser / AdminPassword123)
+dn: cn=adminuser,ou=users,dc=scout,dc=local
+objectclass: inetOrgPerson
+objectclass: organizationalPerson
+objectclass: person
+objectclass: top
+cn: adminuser
+sn: User
+givenName: Admin
+uid: adminuser
+userPassword: AdminPassword123
+mail: adminuser@scout.local
+
+# 4. Create Read-Only User (readonlyuser / UserPassword123)
+dn: cn=readonlyuser,ou=users,dc=scout,dc=local
+objectclass: inetOrgPerson
+objectclass: organizationalPerson
+objectclass: person
+objectclass: top
+cn: readonlyuser
+sn: User
+givenName: ReadOnly
+uid: readonlyuser
+userPassword: UserPassword123
+mail: readonlyuser@scout.local
+
+# 5. Create ServerScout-Admins group & add adminuser
+dn: cn=ServerScout-Admins,ou=groups,dc=scout,dc=local
+objectclass: groupOfNames
+objectclass: top
+cn: ServerScout-Admins
+member: cn=adminuser,ou=users,dc=scout,dc=local
+
+# 6. Create ServerScout-Writers group & add adminuser
+dn: cn=ServerScout-Writers,ou=groups,dc=scout,dc=local
+objectclass: groupOfNames
+objectclass: top
+cn: ServerScout-Writers
+member: cn=adminuser,ou=users,dc=scout,dc=local

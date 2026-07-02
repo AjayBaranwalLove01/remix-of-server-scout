@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useMemo } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Server as ServerIcon,
   FileText,
@@ -9,13 +9,129 @@ import {
   Plus,
   X,
   AlertCircle,
+  Loader2,
 } from "lucide-react";
 import type { Server } from "@/types/server";
 import { useServerStore } from "@/store/serverStore";
 import { useMastersStore } from "@/store/mastersStore";
+import { useAuthStore } from "@/store/authStore";
 import { validateServer } from "@/lib/serverValidation";
 import { InlineText, InlineTextarea, InlineSelect, InlineToggle } from "./InlineEdit";
 import { cn } from "@/lib/utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
+interface SoftwareItem {
+  id: string;
+  displayname: string;
+  displayversion: string;
+  platform: string;
+  recordtime: string;
+}
+
+function SoftwareInventoryDialog({ servername }: { servername: string }) {
+  const [open, setOpen] = useState(false);
+  const [software, setSoftware] = useState<SoftwareItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSoftware = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/servers/${encodeURIComponent(servername)}/software`);
+      if (!res.ok) throw new Error("Failed to fetch software inventory");
+      const data = await res.json();
+      setSoftware(data);
+    } catch (err: any) {
+      setError(err.message || "An error occurred");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenChange = (isOpen: boolean) => {
+    setOpen(isOpen);
+    if (isOpen) {
+      fetchSoftware();
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        <button className="inline-flex items-center gap-1 text-accent hover:underline text-sm font-medium">
+          Open <ExternalLink className="w-3.5 h-3.5" />
+        </button>
+      </DialogTrigger>
+      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
+            <span>Software Inventory</span>
+            <span className="text-sm font-normal text-muted-foreground">({servername})</span>
+          </DialogTitle>
+        </DialogHeader>
+
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-12 gap-3">
+            <Loader2 className="w-8 h-8 animate-spin text-accent" />
+            <p className="text-sm text-muted-foreground">Loading installed software...</p>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg py-8 justify-center">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {!loading && !error && (
+          <>
+            {software.length === 0 ? (
+              <div className="text-center py-12 text-sm text-muted-foreground border border-dashed rounded-lg">
+                No software records found for this server in the inventory database.
+              </div>
+            ) : (
+              <div className="border border-border rounded-lg overflow-hidden shadow-sm">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="font-semibold">Software Name</TableHead>
+                      <TableHead className="font-semibold w-[120px]">Version</TableHead>
+                      <TableHead className="font-semibold w-[100px]">Platform</TableHead>
+                      <TableHead className="font-semibold w-[180px]">Detected At</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {software.map((item) => (
+                      <TableRow key={item.id}>
+                        <TableCell className="font-medium text-foreground max-w-sm truncate" title={item.displayname}>
+                          {item.displayname}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground font-mono text-xs">{item.displayversion || "—"}</TableCell>
+                        <TableCell className="text-muted-foreground text-xs">{item.platform || "—"}</TableCell>
+                        <TableCell className="text-muted-foreground text-xs">
+                          {item.recordtime ? new Date(item.recordtime).toLocaleString() : "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function Section({
   title,
@@ -72,6 +188,7 @@ export function ServerDetailPanel({
 }) {
   const groups = useServerStore((s) => s.groups);
   const allServers = useServerStore((s) => s.servers);
+  const canWrite = useAuthStore((s) => s.user?.canWrite ?? false);
   const { locations, os: osList, loaded: mastersLoaded, fetchAll: fetchMasters } = useMastersStore();
   useEffect(() => { if (!mastersLoaded) fetchMasters(); }, [mastersLoaded, fetchMasters]);
 
@@ -134,14 +251,20 @@ export function ServerDetailPanel({
             Last updated {new Date(server.updatedAt).toLocaleString()}
           </p>
         </div>
-        <button
-          onClick={onSave}
-          disabled={!isDirty || blocked}
-          title={blocked ? "Resolve validation errors before saving" : undefined}
-          className="inline-flex items-center gap-1.5 h-9 px-4 text-sm rounded-md bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors shadow-sm"
-        >
-          <Save className="w-4 h-4" /> Save server
-        </button>
+        {!canWrite ? (
+          <div className="text-xs px-2.5 py-1.5 rounded-md bg-muted text-muted-foreground border border-border flex items-center gap-1.5 font-medium select-none shadow-sm">
+            <X className="w-3.5 h-3.5" /> Read-Only Mode
+          </div>
+        ) : (
+          <button
+            onClick={onSave}
+            disabled={!isDirty || blocked}
+            title={blocked ? "Resolve validation errors before saving" : undefined}
+            className="inline-flex items-center gap-1.5 h-9 px-4 text-sm rounded-md bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors shadow-sm"
+          >
+            <Save className="w-4 h-4" /> Save server
+          </button>
+        )}
       </div>
 
       {blocked && (
@@ -170,7 +293,8 @@ export function ServerDetailPanel({
             <select
               value={server.location}
               onChange={(e) => stageEdit({ location: e.target.value })}
-              className="h-9 w-full px-2 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30"
+              disabled={!canWrite}
+              className="h-9 w-full px-2 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-70 disabled:cursor-not-allowed"
             >
               <option value="">— Select location —</option>
               {activeLocations.map((l) => (
@@ -203,7 +327,8 @@ export function ServerDetailPanel({
             <select
               value={server.os}
               onChange={(e) => handleOsChange(e.target.value)}
-              className="h-9 w-full px-2 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30"
+              disabled={!canWrite}
+              className="h-9 w-full px-2 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-70 disabled:cursor-not-allowed"
             >
               <option value="">— Select OS —</option>
               {activeOs.map((o) => (
@@ -303,10 +428,7 @@ export function ServerDetailPanel({
             </span>
           </Field>
           <Field label="View Software Installed">
-            <a href={server.softwareInstalledUrl} target="_blank" rel="noreferrer"
-               className="inline-flex items-center gap-1 text-accent hover:underline text-sm">
-              Open <ExternalLink className="w-3 h-3" />
-            </a>
+            <SoftwareInventoryDialog servername={server.servername} />
           </Field>
           <Field label="Backup Details">
             <a href={server.backupDetailsUrl} target="_blank" rel="noreferrer"
@@ -362,7 +484,8 @@ export function ServerDetailPanel({
                 <select
                   value={server.primaryGroupId}
                   onChange={(e) => stageEdit({ primaryGroupId: e.target.value })}
-                  className="h-9 w-full px-2 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30"
+                  disabled={!canWrite}
+                  className="h-9 w-full px-2 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-70 disabled:cursor-not-allowed"
                 >
                   {groups.map((g) => (
                     <option key={g.id} value={g.id}>{g.name}</option>
@@ -395,18 +518,20 @@ export function ServerDetailPanel({
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Affected Support Groups
               </p>
-              <div className="flex items-center gap-2">
-                <select
-                  defaultValue=""
-                  onChange={(e) => { addAffected(e.target.value); e.currentTarget.value = ""; }}
-                  className="h-8 px-2 text-xs rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30"
-                >
-                  <option value="" disabled>+ Add available group...</option>
-                  {availableForAdd.map((g) => (
-                    <option key={g.id} value={g.id}>{g.name}</option>
-                  ))}
-                </select>
-              </div>
+              {canWrite && (
+                <div className="flex items-center gap-2">
+                  <select
+                    defaultValue=""
+                    onChange={(e) => { addAffected(e.target.value); e.currentTarget.value = ""; }}
+                    className="h-8 px-2 text-xs rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30"
+                  >
+                    <option value="" disabled>+ Add available group...</option>
+                    {availableForAdd.map((g) => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
             {server.affectedGroups.length === 0 ? (
@@ -439,6 +564,7 @@ export function ServerDetailPanel({
                                   <button
                                     key={m}
                                     onClick={() => toggleAffectedMember(g.id, m)}
+                                    disabled={!canWrite}
                                     className={cn(
                                       "px-2.5 py-1 text-xs rounded-full border transition-colors flex items-center gap-1",
                                       selected
@@ -454,13 +580,15 @@ export function ServerDetailPanel({
                             </div>
                           </div>
                         </div>
-                        <button
-                          onClick={() => removeAffected(g.id)}
-                          className="text-muted-foreground hover:text-destructive p-1 rounded hover:bg-destructive/10 transition-colors"
-                          title="Remove group"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
+                        {canWrite && (
+                          <button
+                            onClick={() => removeAffected(g.id)}
+                            className="text-muted-foreground hover:text-destructive p-1 rounded hover:bg-destructive/10 transition-colors"
+                            title="Remove group"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

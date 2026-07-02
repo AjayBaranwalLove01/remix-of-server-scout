@@ -87,6 +87,13 @@ interface ServerStore {
   createServer: () => Promise<Server | null>;
   deleteServer: (sdbID: number) => Promise<void>;
 }
+const getHeaders = (extra: Record<string, string> = {}) => {
+  const token = localStorage.getItem("scout_token");
+  return {
+    ...extra,
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
+  };
+};
 
 export const useServerStore = create<ServerStore>((set, get) => ({
   servers: [],
@@ -232,11 +239,11 @@ export const useServerStore = create<ServerStore>((set, get) => ({
 
     try {
       const [srvRes, grpRes] = await Promise.all([
-        fetch(`/api/servers?${queryParams}`).then((r) => {
+        fetch(`/api/servers?${queryParams}`, { headers: getHeaders() }).then((r) => {
           if (!r.ok) throw new Error("Failed to load servers list");
           return r.json();
         }),
-        fetch("/api/groups").then((r) => {
+        fetch("/api/groups", { headers: getHeaders() }).then((r) => {
           if (!r.ok) throw new Error("Failed to load support groups");
           return r.json();
         })
@@ -261,7 +268,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
 
   fetchFiltersMetadata: async () => {
     try {
-      const r = await fetch("/api/servers/filters");
+      const r = await fetch("/api/servers/filters", { headers: getHeaders() });
       if (!r.ok) throw new Error("Failed to load filter headers metadata");
       const data = await r.json();
       set({
@@ -282,7 +289,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
   fetchDashboardStats: async () => {
     set({ loadingStats: true });
     try {
-      const r = await fetch("/api/dashboard/stats");
+      const r = await fetch("/api/dashboard/stats", { headers: getHeaders() });
       if (!r.ok) throw new Error("Failed to load dashboard metrics");
       const data = await r.json();
       set({
@@ -297,7 +304,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
 
   refreshOne: async (id) => {
     try {
-      const r = await fetch(`/api/servers/${id}`);
+      const r = await fetch(`/api/servers/${id}`, { headers: getHeaders() });
       if (!r.ok) return;
       const data = await r.json();
       const updated = rowToServer(data);
@@ -316,7 +323,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
 
     const res = await fetch(`/api/servers/${existing.id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(patch)
     });
 
@@ -345,7 +352,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
     const draft = emptyServer(0);
     const res = await fetch("/api/servers", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(draft)
     });
 
@@ -374,7 +381,8 @@ export const useServerStore = create<ServerStore>((set, get) => ({
     if (!existing || !existing.id) throw new Error("Server not found");
 
     const res = await fetch(`/api/servers/${existing.id}`, {
-      method: "DELETE"
+      method: "DELETE",
+      headers: getHeaders()
     });
 
     if (!res.ok) {

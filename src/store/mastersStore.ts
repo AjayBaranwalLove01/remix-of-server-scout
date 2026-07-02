@@ -21,6 +21,14 @@ interface MastersStore {
   deleteOs: (id: string) => Promise<void>;
 }
 
+const getHeaders = (extra: Record<string, string> = {}) => {
+  const token = localStorage.getItem("scout_token");
+  return {
+    ...extra,
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
+  };
+};
+
 export const useMastersStore = create<MastersStore>((set, get) => ({
   locations: [],
   os: [],
@@ -32,11 +40,11 @@ export const useMastersStore = create<MastersStore>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const [locRes, osRes] = await Promise.all([
-        fetch("/api/locations").then((r) => {
+        fetch("/api/locations", { headers: getHeaders() }).then((r) => {
           if (!r.ok) throw new Error("Failed to load locations");
           return r.json();
         }),
-        fetch("/api/os").then((r) => {
+        fetch("/api/os", { headers: getHeaders() }).then((r) => {
           if (!r.ok) throw new Error("Failed to load OS catalog");
           return r.json();
         })
@@ -75,7 +83,7 @@ export const useMastersStore = create<MastersStore>((set, get) => ({
   createLocation: async (input) => {
     const res = await fetch("/api/locations", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(input)
     });
     if (!res.ok) {
@@ -93,7 +101,7 @@ export const useMastersStore = create<MastersStore>((set, get) => ({
   updateLocation: async (id, patch) => {
     const res = await fetch(`/api/locations/${id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(patch)
     });
     if (!res.ok) {
@@ -110,7 +118,8 @@ export const useMastersStore = create<MastersStore>((set, get) => ({
   },
   deleteLocation: async (id) => {
     const res = await fetch(`/api/locations/${id}`, {
-      method: "DELETE"
+      method: "DELETE",
+      headers: getHeaders()
     });
     if (!res.ok) {
       const errData = await res.json();
@@ -122,7 +131,7 @@ export const useMastersStore = create<MastersStore>((set, get) => ({
   createOs: async (input) => {
     const res = await fetch("/api/os", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(input)
     });
     if (!res.ok) {
@@ -141,7 +150,7 @@ export const useMastersStore = create<MastersStore>((set, get) => ({
   updateOs: async (id, patch) => {
     const res = await fetch(`/api/os/${id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(patch)
     });
     if (!res.ok) {
@@ -159,7 +168,8 @@ export const useMastersStore = create<MastersStore>((set, get) => ({
   },
   deleteOs: async (id) => {
     const res = await fetch(`/api/os/${id}`, {
-      method: "DELETE"
+      method: "DELETE",
+      headers: getHeaders()
     });
     if (!res.ok) {
       const errData = await res.json();

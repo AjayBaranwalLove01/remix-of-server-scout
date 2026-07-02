@@ -14,6 +14,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { useServerStore } from "@/store/serverStore";
+import { useAuthStore } from "@/store/authStore";
 import type { Server } from "@/types/server";
 import { StatusBadge, PatchedBadge, PriorityBadge } from "./StatusBadge";
 import { InlineText, InlineSelect } from "./InlineEdit";
@@ -78,6 +79,8 @@ export function InventoryTable() {
     setSorting,
     resetFilters,
   } = useServerStore();
+
+  const canWrite = useAuthStore((s) => s.user?.canWrite ?? false);
 
   const [query, setQuery] = useState(searchTerm);
   const [expandedFilters, setExpandedFilters] = useState(false);
@@ -291,26 +294,30 @@ export function InventoryTable() {
               {pendingCount} unsaved
             </span>
           )}
-          <button
-            onClick={discardAll}
-            disabled={!pendingCount}
-            className="inline-flex items-center gap-1.5 h-9 px-3 text-sm rounded-md border border-border hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            <RotateCcw className="w-3.5 h-3.5" /> Discard
-          </button>
-          <button
-            onClick={saveAll}
-            disabled={!pendingCount}
-            className="inline-flex items-center gap-1.5 h-9 px-3 text-sm rounded-md bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
-          >
-            <Save className="w-3.5 h-3.5" /> Save all
-          </button>
-          <button
-            onClick={handleCreate}
-            className="inline-flex items-center gap-1.5 h-9 px-3 text-sm rounded-md bg-accent text-accent-foreground hover:bg-accent/90 font-medium transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" /> New server
-          </button>
+          {canWrite && (
+            <>
+              <button
+                onClick={discardAll}
+                disabled={!pendingCount}
+                className="inline-flex items-center gap-1.5 h-9 px-3 text-sm rounded-md border border-border hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Discard
+              </button>
+              <button
+                onClick={saveAll}
+                disabled={!pendingCount}
+                className="inline-flex items-center gap-1.5 h-9 px-3 text-sm rounded-md bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+              >
+                <Save className="w-3.5 h-3.5" /> Save all
+              </button>
+              <button
+                onClick={handleCreate}
+                className="inline-flex items-center gap-1.5 h-9 px-3 text-sm rounded-md bg-accent text-accent-foreground hover:bg-accent/90 font-medium transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" /> New server
+              </button>
+            </>
+          )}
           <button
             onClick={exportCsv}
             className="inline-flex items-center gap-1.5 h-9 px-3 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary-hover transition-colors"
@@ -594,22 +601,26 @@ export function InventoryTable() {
                     </td>
                     <td className="px-3 py-3"><PriorityBadge priority={s.priority} /></td>
                     <td className="px-3 py-3">
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => saveRow(s.sno)}
-                          disabled={!isDirty || savingIds.has(s.sno)}
-                          className="inline-flex items-center gap-1 h-7 px-2.5 text-xs rounded-md bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed font-medium transition-colors"
-                        >
-                          {savingIds.has(s.sno) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} Save
-                        </button>
-                        <button
-                          onClick={() => setConfirmDelete(s)}
-                          title="Delete server"
-                          className="inline-flex items-center justify-center h-7 w-7 rounded-md border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                      {canWrite ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => saveRow(s.sno)}
+                            disabled={!isDirty || savingIds.has(s.sno)}
+                            className="inline-flex items-center gap-1 h-7 px-2.5 text-xs rounded-md bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed font-medium transition-colors"
+                          >
+                            {savingIds.has(s.sno) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} Save
+                          </button>
+                          <button
+                            onClick={() => setConfirmDelete(s)}
+                            title="Delete server"
+                            className="inline-flex items-center justify-center h-7 w-7 rounded-md border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground italic select-none">View only</span>
+                      )}
                     </td>
                   </tr>
                   {isExpanded && (

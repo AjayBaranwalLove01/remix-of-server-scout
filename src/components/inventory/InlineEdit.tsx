@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, KeyboardEvent } from "react";
 import { Check, X, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuthStore } from "@/store/authStore";
 
 type Option = { value: string; label: string };
 
@@ -9,6 +10,7 @@ interface BaseProps {
   onSave: (next: string) => void;
   className?: string;
   display?: (v: string) => React.ReactNode;
+  readOnly?: boolean;
 }
 
 interface TextProps extends BaseProps {
@@ -16,10 +18,13 @@ interface TextProps extends BaseProps {
   placeholder?: string;
 }
 
-export function InlineText({ value, onSave, className, display, type = "text", placeholder }: TextProps) {
+export function InlineText({ value, onSave, className, display, type = "text", placeholder, readOnly }: TextProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const inputRef = useRef<HTMLInputElement>(null);
+  
+  const canWrite = useAuthStore((s) => s.user?.canWrite ?? false);
+  const isReadOnly = readOnly || !canWrite;
 
   useEffect(() => setDraft(value), [value]);
   useEffect(() => {
@@ -39,6 +44,14 @@ export function InlineText({ value, onSave, className, display, type = "text", p
     if (e.key === "Enter") commit();
     if (e.key === "Escape") cancel();
   };
+
+  if (isReadOnly) {
+    return (
+      <div className={cn("inline-flex items-center gap-1.5 max-w-full text-left rounded", className)}>
+        <span className="truncate">{display ? display(value) : value || <span className="text-muted-foreground/55 italic">—</span>}</span>
+      </div>
+    );
+  }
 
   if (editing) {
     return (
@@ -77,10 +90,13 @@ export function InlineText({ value, onSave, className, display, type = "text", p
   );
 }
 
-export function InlineTextarea({ value, onSave, className }: BaseProps) {
+export function InlineTextarea({ value, onSave, className, readOnly }: BaseProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  const canWrite = useAuthStore((s) => s.user?.canWrite ?? false);
+  const isReadOnly = readOnly || !canWrite;
 
   useEffect(() => setDraft(value), [value]);
   useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
@@ -89,6 +105,16 @@ export function InlineTextarea({ value, onSave, className }: BaseProps) {
     if (draft !== value) onSave(draft);
     setEditing(false);
   };
+
+  if (isReadOnly) {
+    return (
+      <div className={cn("block w-full text-left rounded-md px-3 py-2 text-sm bg-muted/10 border border-transparent min-h-[60px]", className)}>
+        <span className="whitespace-pre-wrap text-foreground">
+          {value || <span className="text-muted-foreground/50 italic">—</span>}
+        </span>
+      </div>
+    );
+  }
 
   if (editing) {
     return (
@@ -127,7 +153,21 @@ export function InlineSelect({
   options,
   className,
   display,
+  readOnly,
 }: BaseProps & { options: Option[] }) {
+  const canWrite = useAuthStore((s) => s.user?.canWrite ?? false);
+  const isReadOnly = readOnly || !canWrite;
+
+  if (isReadOnly) {
+    const matchingOpt = options.find((o) => o.value === value);
+    const label = matchingOpt ? matchingOpt.label : value;
+    return (
+      <div className={cn("inline-flex items-center text-sm text-foreground", className)}>
+        {display ? display(label) : label || <span className="text-muted-foreground/55 italic">—</span>}
+      </div>
+    );
+  }
+
   return (
     <select
       value={value}
@@ -150,12 +190,40 @@ export function InlineToggle({
   value,
   onSave,
   className,
+  readOnly,
 }: {
   value: "Yes" | "No";
   onSave: (next: "Yes" | "No") => void;
   className?: string;
+  readOnly?: boolean;
 }) {
   const isYes = value === "Yes";
+  const canWrite = useAuthStore((s) => s.user?.canWrite ?? false);
+  const isReadOnly = readOnly || !canWrite;
+
+  if (isReadOnly) {
+    return (
+      <div className={cn("inline-flex items-center gap-2 select-none opacity-80", className)}>
+        <span
+          className={cn(
+            "relative w-9 h-5 rounded-full transition-colors",
+            isYes ? "bg-accent/70" : "bg-muted-foreground/20"
+          )}
+        >
+          <span
+            className={cn(
+              "absolute top-0.5 w-4 h-4 rounded-full bg-card shadow transition-all",
+              isYes ? "left-[18px]" : "left-0.5"
+            )}
+          />
+        </span>
+        <span className={cn("text-xs font-medium", isYes ? "text-accent/80" : "text-muted-foreground/80")}>
+          {value}
+        </span>
+      </div>
+    );
+  }
+
   return (
     <button
       onClick={() => onSave(isYes ? "No" : "Yes")}

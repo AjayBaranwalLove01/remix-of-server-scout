@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import db from './db.js';
+import auth from './auth.js';
 
 dotenv.config();
 
@@ -12,6 +13,61 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+
+// Authentication Verification Middleware
+function requireAuth(req, res, next) {
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+  
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication token required.' });
+  }
+  
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = auth.verifyToken(token);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    console.warn('Authentication token verification failed:', err.message);
+    res.status(401).json({ error: 'Session expired or invalid token.' });
+  }
+}
+
+// Write Permissions Verification Middleware
+function requireWriteAccess(req, res, next) {
+  if (!req.user || !req.user.canWrite) {
+    return res.status(403).json({ error: 'Unauthorized: Read-only access restricts this action.' });
+  }
+  next();
+}
+
+// Open Login endpoint (unprotected by JWT)
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const userDetails = await auth.authenticateUser(username, password);
+    const token = auth.generateToken(userDetails);
+    res.json({
+      token,
+      user: {
+        username: userDetails.username,
+        displayName: userDetails.displayName,
+        email: userDetails.email,
+        canWrite: userDetails.canWrite,
+        groups: userDetails.groups
+      }
+    });
+  } catch (err) {
+    console.warn('Login attempt failed:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Protect all subsequent API endpoints
+app.use('/api', requireAuth);
 
 // Helper to log errors securely (not exposing SQL details to client)
 function handleError(res, err, userMessage = 'An internal database error occurred.') {
@@ -252,7 +308,20 @@ app.get('/api/servers/:id', async (req, res) => {
   }
 });
 
-app.post('/api/servers', async (req, res) => {
+app.get('/api/servers/:servername/software', async (req, res) => {
+  try {
+    const { servername } = req.params;
+    const result = await db.query(
+      'SELECT id, displayname, displayversion, platform, recordtime FROM dbo.invSoftware WHERE Servername = @servername ORDER BY displayname ASC',
+      { servername }
+    );
+    res.json(result.recordset);
+  } catch (err) {
+    handleError(res, err, 'Failed to fetch software inventory.');
+  }
+});
+
+app.post('/api/servers', requireWriteAccess, async (req, res) => {
   try {
     const data = req.body;
     let servername = data.servername ? data.servername.trim() : '';
@@ -267,6 +336,12 @@ app.post('/api/servers', async (req, res) => {
         if (recheck.recordset[0].count === 0) break;
       }
       servername = candidate;
+    } else {
+      // Enforce uniqueness constraint
+      const check = await db.query('SELECT COUNT(*) AS count FROM dbo.MasterRecords WHERE Servername = @servername', { servername });
+      if (check.recordset[0].count > 0) {
+        return res.status(400).json({ error: `Server name "${servername}" already exists. Please choose a unique name.` });
+      }
     }
 
     // Location ID lookup
@@ -277,15 +352,23 @@ app.post('/api/servers', async (req, res) => {
         locationId = locRes.recordset[0].ID;
       }
     }
+    if (!locationId) {
+      // Fallback: get first available location to prevent INNER JOIN view exclusion
+      const defaultLoc = await db.query('SELECT TOP 1 ID FROM dbo.MASTERLocations ORDER BY ID');
+      if (defaultLoc.recordset.length > 0) {
+        locationId = defaultLoc.recordset[0].ID;
+      }
+    }
 
     const result = await db.runInTransaction(async (tx) => {
       // 1. Insert into MasterRecords
       const mrRequest = tx.request();
-      mrRequest.input('recordtype', data.recordtype || 'Server');
+      const recType = data.recordtype === 'Server' ? 1 : (data.recordtype || 1);
+      mrRequest.input('recordtype', recType);
       mrRequest.input('Servername', servername);
       mrRequest.input('BuildName', data.BuildName || '');
       mrRequest.input('SerialNumber', data.serialnumber || '');
-      mrRequest.input('BuildDate', data.buildDate || '');
+      mrRequest.input('BuildDate', data.buildDate || null);
       mrRequest.input('BuildEngineer', data.buildEngineer || '');
       mrRequest.input('OSName', data.os || '');
       mrRequest.input('OSSupportEnds', data.osSupportEnds || '');
@@ -295,12 +378,22 @@ app.post('/api/servers', async (req, res) => {
       mrRequest.input('LocationID', locationId);
       mrRequest.input('sDomain', data.sdomain || '');
       mrRequest.input('zone', data.network || '');
+      mrRequest.input('SecID', ''); // Must be empty string due to WHERE SecID = '' constraint
+      
+      // Compliance/Maintenance fields placed in MasterRecords
+      mrRequest.input('PatchSequence', data.patchSequence || '');
+      mrRequest.input('MaintenanceWindowComment', data.maintenanceComment || '');
+      mrRequest.input('PCIAsset', data.pciAsset || 'No');
+      mrRequest.input('InternetFacing', data.internetFacing || 'No');
+      mrRequest.input('SOCIAsset', data.sociAsset || 'No');
+      mrRequest.input('Essential8', data.essential8 || 'No');
+      mrRequest.input('IsPatched', data.isPatched || 'No');
 
       const mrSql = `
         INSERT INTO dbo.MasterRecords 
-        (recordtype, Servername, BuildName, SerialNumber, BuildDate, BuildEngineer, OSName, OSSupportEnds, Model, ManagementIP, DNSIP, LocationID, sDomain, zone)
+        (recordtype, Servername, BuildName, SerialNumber, BuildDate, BuildEngineer, OSName, OSSupportEnds, Model, ManagementIP, DNSIP, LocationID, sDomain, zone, SecID, PatchSequence, MaintenanceWindowComment, PCIAsset, InternetFacing, SOCIAsset, Essential8, IsPatched)
         VALUES
-        (@recordtype, @Servername, @BuildName, @SerialNumber, @BuildDate, @BuildEngineer, @OSName, @OSSupportEnds, @Model, @ManagementIP, @DNSIP, @LocationID, @sDomain, @zone);
+        (@recordtype, @Servername, @BuildName, @SerialNumber, @BuildDate, @BuildEngineer, @OSName, @OSSupportEnds, @Model, @ManagementIP, @DNSIP, @LocationID, @sDomain, @zone, @SecID, @PatchSequence, @MaintenanceWindowComment, @PCIAsset, @InternetFacing, @SOCIAsset, @Essential8, @IsPatched);
         SELECT SCOPE_IDENTITY() AS sdbID;
       `;
       const mrResult = await mrRequest.query(mrSql);
@@ -311,14 +404,7 @@ app.post('/api/servers', async (req, res) => {
       xsRequest.input('Servername', servername);
       xsRequest.input('MaintenanceDayNew', data.day || 'Sunday');
       xsRequest.input('MaintenanceTimeNew', data.time || '00:00:00');
-      xsRequest.input('PatchSequence', data.patchSequence || '');
-      xsRequest.input('MaintenanceWindowComment', data.maintenanceComment || '');
-      xsRequest.input('PCIAsset', data.pciAsset || 'No');
-      xsRequest.input('InternetFacing', data.internetFacing || 'No');
-      xsRequest.input('SOCIAsset', data.sociAsset || 'No');
-      xsRequest.input('Essential8', data.essential8 || 'No');
       xsRequest.input('Priority', priorityToDb(data.priority || 'Medium'));
-      xsRequest.input('IsPatched', data.isPatched || 'No');
       xsRequest.input('PatchCategory', data.patchCategory || 'Green');
       xsRequest.input('patchcomment', data.patchNotes || '');
       xsRequest.input('VirtualGuest', data.VirtualGuest || 'No');
@@ -340,9 +426,9 @@ app.post('/api/servers', async (req, res) => {
 
       const xsSql = `
         INSERT INTO dbo.xSummary 
-        (Servername, MaintenanceDayNew, MaintenanceTimeNew, PatchSequence, MaintenanceWindowComment, PCIAsset, InternetFacing, SOCIAsset, Essential8, Priority, IsPatched, PatchCategory, patchcomment, VirtualGuest, Owner, ChangeApprover, Description, Contact, PrimaryFunction, SecondaryFunction, BusinessFunction, Decommissioned, Status, projeng, PrimaryAssigneeGroup, PrimaryAssigneeManagerName, AffectedGroups, BusinessGroup, PrimaryAssigneeGroupEmail)
+        (Servername, MaintenanceDayNew, MaintenanceTimeNew, Priority, PatchCategory, patchcomment, VirtualGuest, Owner, ChangeApprover, Description, Contact, PrimaryFunction, SecondaryFunction, BusinessFunction, Decommissioned, Status, projeng, PrimaryAssigneeGroup, PrimaryAssigneeManagerName, AffectedGroups, BusinessGroup, PrimaryAssigneeGroupEmail)
         VALUES
-        (@Servername, @MaintenanceDayNew, @MaintenanceTimeNew, @PatchSequence, @MaintenanceWindowComment, @PCIAsset, @InternetFacing, @SOCIAsset, @Essential8, @Priority, @IsPatched, @PatchCategory, @patchcomment, @VirtualGuest, @Owner, @ChangeApprover, @Description, @Contact, @PrimaryFunction, @SecondaryFunction, @BusinessFunction, @Decommissioned, @Status, @projeng, @PrimaryAssigneeGroup, @PrimaryAssigneeManagerName, @AffectedGroups, @BusinessGroup, @PrimaryAssigneeGroupEmail)
+        (@Servername, @MaintenanceDayNew, @MaintenanceTimeNew, @Priority, @PatchCategory, @patchcomment, @VirtualGuest, @Owner, @ChangeApprover, @Description, @Contact, @PrimaryFunction, @SecondaryFunction, @BusinessFunction, @Decommissioned, @Status, @projeng, @PrimaryAssigneeGroup, @PrimaryAssigneeManagerName, @AffectedGroups, @BusinessGroup, @PrimaryAssigneeGroupEmail)
       `;
       await xsRequest.query(xsSql);
 
@@ -357,7 +443,7 @@ app.post('/api/servers', async (req, res) => {
   }
 });
 
-app.put('/api/servers/:id', async (req, res) => {
+app.put('/api/servers/:id', requireWriteAccess, async (req, res) => {
   try {
     const { id } = req.params;
     const data = req.body;
@@ -369,6 +455,13 @@ app.put('/api/servers/:id', async (req, res) => {
     }
     const oldServername = current.recordset[0].Servername;
     const newServername = data.servername ? data.servername.trim() : oldServername;
+
+    if (data.servername && newServername.toLowerCase() !== oldServername.toLowerCase()) {
+      const check = await db.query('SELECT COUNT(*) AS count FROM dbo.MasterRecords WHERE Servername = @newServername', { newServername });
+      if (check.recordset[0].count > 0) {
+        return res.status(400).json({ error: `Server name "${newServername}" already exists. Please choose a unique name.` });
+      }
+    }
 
     // Location ID lookup
     let locationId = undefined;
@@ -387,11 +480,15 @@ app.put('/api/servers/:id', async (req, res) => {
       mrRequest.input('id', id);
       
       const mrFields = [];
-      if (data.recordtype !== undefined) { mrRequest.input('recordtype', data.recordtype); mrFields.push('recordtype = @recordtype'); }
+      if (data.recordtype !== undefined) {
+        const recType = data.recordtype === 'Server' ? 1 : data.recordtype;
+        mrRequest.input('recordtype', recType);
+        mrFields.push('recordtype = @recordtype');
+      }
       if (data.servername !== undefined) { mrRequest.input('Servername', newServername); mrFields.push('Servername = @Servername'); }
       if (data.BuildName !== undefined) { mrRequest.input('BuildName', data.BuildName); mrFields.push('BuildName = @BuildName'); }
       if (data.serialnumber !== undefined) { mrRequest.input('SerialNumber', data.serialnumber); mrFields.push('SerialNumber = @SerialNumber'); }
-      if (data.buildDate !== undefined) { mrRequest.input('BuildDate', data.buildDate); mrFields.push('BuildDate = @BuildDate'); }
+      if (data.buildDate !== undefined) { mrRequest.input('BuildDate', data.buildDate || null); mrFields.push('BuildDate = @BuildDate'); }
       if (data.buildEngineer !== undefined) { mrRequest.input('BuildEngineer', data.buildEngineer); mrFields.push('BuildEngineer = @BuildEngineer'); }
       if (data.os !== undefined) { mrRequest.input('OSName', data.os); mrFields.push('OSName = @OSName'); }
       if (data.osSupportEnds !== undefined) { mrRequest.input('OSSupportEnds', data.osSupportEnds); mrFields.push('OSSupportEnds = @OSSupportEnds'); }
@@ -401,6 +498,15 @@ app.put('/api/servers/:id', async (req, res) => {
       if (locationId !== undefined) { mrRequest.input('LocationID', locationId); mrFields.push('LocationID = @LocationID'); }
       if (data.sdomain !== undefined) { mrRequest.input('sDomain', data.sdomain); mrFields.push('sDomain = @sDomain'); }
       if (data.network !== undefined) { mrRequest.input('zone', data.network); mrFields.push('zone = @zone'); }
+
+      // Compliance/Maintenance fields placed in MasterRecords
+      if (data.patchSequence !== undefined) { mrRequest.input('PatchSequence', data.patchSequence); mrFields.push('PatchSequence = @PatchSequence'); }
+      if (data.maintenanceComment !== undefined) { mrRequest.input('MaintenanceWindowComment', data.maintenanceComment); mrFields.push('MaintenanceWindowComment = @MaintenanceWindowComment'); }
+      if (data.pciAsset !== undefined) { mrRequest.input('PCIAsset', data.pciAsset); mrFields.push('PCIAsset = @PCIAsset'); }
+      if (data.internetFacing !== undefined) { mrRequest.input('InternetFacing', data.internetFacing); mrFields.push('InternetFacing = @InternetFacing'); }
+      if (data.sociAsset !== undefined) { mrRequest.input('SOCIAsset', data.sociAsset); mrFields.push('SOCIAsset = @SOCIAsset'); }
+      if (data.essential8 !== undefined) { mrRequest.input('Essential8', data.essential8); mrFields.push('Essential8 = @Essential8'); }
+      if (data.isPatched !== undefined) { mrRequest.input('IsPatched', data.isPatched); mrFields.push('IsPatched = @IsPatched'); }
       
       if (mrFields.length > 0) {
         const mrSql = `UPDATE dbo.MasterRecords SET ${mrFields.join(', ')} WHERE sdbID = @id`;
@@ -418,14 +524,7 @@ app.put('/api/servers/:id', async (req, res) => {
       const xsFields = [];
       if (data.day !== undefined) { xsRequest.input('MaintenanceDayNew', data.day); xsFields.push('MaintenanceDayNew = @MaintenanceDayNew'); }
       if (data.time !== undefined) { xsRequest.input('MaintenanceTimeNew', data.time); xsFields.push('MaintenanceTimeNew = @MaintenanceTimeNew'); }
-      if (data.patchSequence !== undefined) { xsRequest.input('PatchSequence', data.patchSequence); xsFields.push('PatchSequence = @PatchSequence'); }
-      if (data.maintenanceComment !== undefined) { xsRequest.input('MaintenanceWindowComment', data.maintenanceComment); xsFields.push('MaintenanceWindowComment = @MaintenanceWindowComment'); }
-      if (data.pciAsset !== undefined) { xsRequest.input('PCIAsset', data.pciAsset); xsFields.push('PCIAsset = @PCIAsset'); }
-      if (data.internetFacing !== undefined) { xsRequest.input('InternetFacing', data.internetFacing); xsFields.push('InternetFacing = @InternetFacing'); }
-      if (data.sociAsset !== undefined) { xsRequest.input('SOCIAsset', data.sociAsset); xsFields.push('SOCIAsset = @SOCIAsset'); }
-      if (data.essential8 !== undefined) { xsRequest.input('Essential8', data.essential8); xsFields.push('Essential8 = @Essential8'); }
       if (data.priority !== undefined) { xsRequest.input('Priority', priorityToDb(data.priority)); xsFields.push('Priority = @Priority'); }
-      if (data.isPatched !== undefined) { xsRequest.input('IsPatched', data.isPatched); xsFields.push('IsPatched = @IsPatched'); }
       if (data.patchCategory !== undefined) { xsRequest.input('PatchCategory', data.patchCategory); xsFields.push('PatchCategory = @PatchCategory'); }
       if (data.patchNotes !== undefined) { xsRequest.input('patchcomment', data.patchNotes); xsFields.push('patchcomment = @patchcomment'); }
       if (data.VirtualGuest !== undefined) { xsRequest.input('VirtualGuest', data.VirtualGuest); xsFields.push('VirtualGuest = @VirtualGuest'); }
@@ -475,7 +574,7 @@ app.put('/api/servers/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/servers/:id', async (req, res) => {
+app.delete('/api/servers/:id', requireWriteAccess, async (req, res) => {
   try {
     const { id } = req.params;
     // Deleting from MasterRecords cascades automatically to xSummary via FOREIGN KEY reference
@@ -504,7 +603,7 @@ app.get('/api/locations', async (req, res) => {
   }
 });
 
-app.post('/api/locations', async (req, res) => {
+app.post('/api/locations', requireWriteAccess, async (req, res) => {
   try {
     const { location_name, status } = req.body;
     if (!location_name || !location_name.trim()) {
@@ -529,7 +628,7 @@ app.post('/api/locations', async (req, res) => {
   }
 });
 
-app.put('/api/locations/:id', async (req, res) => {
+app.put('/api/locations/:id', requireWriteAccess, async (req, res) => {
   try {
     const { id } = req.params;
     const { location_name, status } = req.body;
@@ -557,7 +656,7 @@ app.put('/api/locations/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/locations/:id', async (req, res) => {
+app.delete('/api/locations/:id', requireWriteAccess, async (req, res) => {
   try {
     const { id } = req.params;
     await db.query('DELETE FROM dbo.MASTERLocations WHERE ID = @id', { id });
@@ -580,7 +679,7 @@ app.get('/api/os', async (req, res) => {
   }
 });
 
-app.post('/api/os', async (req, res) => {
+app.post('/api/os', requireWriteAccess, async (req, res) => {
   try {
     const { os_name, os_support_end_date, status } = req.body;
     if (!os_name || !os_name.trim()) {
@@ -605,7 +704,7 @@ app.post('/api/os', async (req, res) => {
   }
 });
 
-app.put('/api/os/:id', async (req, res) => {
+app.put('/api/os/:id', requireWriteAccess, async (req, res) => {
   try {
     const { id } = req.params;
     const { os_name, os_support_end_date, status } = req.body;
@@ -637,7 +736,7 @@ app.put('/api/os/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/os/:id', async (req, res) => {
+app.delete('/api/os/:id', requireWriteAccess, async (req, res) => {
   try {
     const { id } = req.params;
     await db.query('DELETE FROM dbo.MASTEROS WHERE ID = @id', { id });
