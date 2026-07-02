@@ -140,8 +140,16 @@ app.get('/api/servers', async (req, res) => {
 
     // Status Filter
     if (status !== 'All') {
-      conditions.push('Status = @status');
-      params.status = status;
+      if (status === 'Decommissioned') {
+        conditions.push("(Status = 'Decommissioned' OR Decommissioned = 'Yes')");
+      } else if (status === 'Production') {
+        conditions.push("(Status = 'Production' OR Status = 'Active')");
+      } else if (status === 'Non Production' || status === 'Non-Production') {
+        conditions.push("(Status = 'Non-Production' OR (Status <> 'Production' AND Status <> 'Active' AND Status <> 'Build' AND Status <> 'Pre-Production' AND Status <> 'Decommissioned' AND (Decommissioned <> 'Yes' OR Decommissioned IS NULL)))");
+      } else {
+        conditions.push('Status = @status');
+        params.status = status;
+      }
     }
 
     // Domain Filter

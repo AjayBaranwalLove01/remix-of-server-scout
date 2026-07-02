@@ -11,7 +11,7 @@ import Index from "./pages/Index.tsx";
 import NotFound from "./pages/NotFound.tsx";
 import Locations from "./pages/Locations.tsx";
 import OsCatalog from "./pages/OsCatalog.tsx";
-import Placeholder from "./pages/Placeholder.tsx";
+import ServerStateList from "./pages/ServerStateList.tsx";
 import LoginPage from "./pages/Login.tsx";
 
 const queryClient = new QueryClient();
@@ -52,12 +52,7 @@ const App = () => (
               <Route path="/inventory" element={<Index />} />
               <Route path="/locations" element={<Locations />} />
               <Route path="/os" element={<OsCatalog />} />
-              <Route path="/monitoring" element={<Placeholder title="Monitoring" />} />
-              <Route path="/servers" element={<Placeholder title="Servers" />} />
-              <Route path="/reports" element={<Placeholder title="Reports" />} />
-              <Route path="/alerts" element={<Placeholder title="Alerts" />} />
-              <Route path="/settings" element={<Placeholder title="Settings" />} />
-              <Route path="/users" element={<Placeholder title="Users" />} />
+              <Route path="/servers/state/:state" element={<ServerStateList />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Route>

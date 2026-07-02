@@ -69,6 +69,8 @@ export function rowToServer(r: any): Server {
     designEngineer: r.ProjEng ?? r.design_engineer ?? "",
     primaryGroupId: r.primary_group_id ?? r.primaryGroupId ?? "",
     affectedGroups: affected,
+    ping: r.pingcheck ?? r.ping ?? "",
+    primaryAssigneeManager: r.PrimaryAssigneeManagerName ?? r.primaryAssigneeManager ?? "",
     updatedAt: r.RecordUpdate ?? r.updated_at ?? new Date().toISOString(),
   };
 }

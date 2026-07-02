@@ -33,21 +33,19 @@ type Item = { title: string; url: string; icon: React.ComponentType<{ className?
 
 const mainItems: Item[] = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  { title: "Monitoring", url: "/monitoring", icon: Activity },
-  { title: "Servers", url: "/servers", icon: Server },
-  { title: "Reports", url: "/reports", icon: FileBarChart },
-  { title: "Alerts", url: "/alerts", icon: BellRing },
-  { title: "Inventory", url: "/inventory", icon: Boxes },
+];
+
+const stateItems: Item[] = [
+  { title: "Production", url: "/servers/state/production", icon: Server },
+  { title: "Non Production", url: "/servers/state/non-production", icon: Server },
+  { title: "Build", url: "/servers/state/build", icon: Server },
+  { title: "Pre-Production", url: "/servers/state/pre-production", icon: Server },
+  { title: "Decommissioned", url: "/servers/state/decommissioned", icon: Server },
 ];
 
 const masterItems: Item[] = [
   { title: "Locations", url: "/locations", icon: MapPin },
   { title: "OS Master", url: "/os", icon: Monitor },
-];
-
-const systemItems: Item[] = [
-  { title: "Settings", url: "/settings", icon: Settings },
-  { title: "Users", url: "/users", icon: Users },
 ];
 
 export function AppSidebar() {
@@ -96,8 +94,8 @@ export function AppSidebar() {
 
       <SidebarContent>
         {renderGroup("Workspace", mainItems)}
+        {renderGroup("Server States", stateItems)}
         {renderGroup("Masters", masterItems)}
-        {renderGroup("System", systemItems)}
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border">

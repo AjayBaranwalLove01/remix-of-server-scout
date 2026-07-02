@@ -63,5 +63,8 @@ export interface Server {
   primaryGroupId: string;
   affectedGroups: AffectedGroup[];
 
+  ping?: string;
+  primaryAssigneeManager?: string;
+
   updatedAt: string;
 }
