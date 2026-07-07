@@ -19,7 +19,31 @@ export function authenticateUser(username, password) {
       return reject(new Error('Username and password are required.'));
     }
 
-    // 1. Local Mock LDAP Mode
+    // 1. Local Fallback Mode (AD Bypass)
+    if (process.env.AD_ENABLED === 'false') {
+      const lowerUser = cleanUser.toLowerCase();
+      
+      // If a local password is configured, verify against it
+      const localPassword = process.env.LOCAL_AUTH_PASSWORD;
+      if (localPassword && password !== localPassword) {
+        return reject(new Error('Invalid password for local authentication.'));
+      }
+      
+      // Determine admin access
+      const adminUsersStr = process.env.LOCAL_ADMIN_USERS || 'adminuser,admin,ajay,ajay2';
+      const adminUsers = adminUsersStr.split(',').map(u => u.trim().toLowerCase());
+      const isAdmin = adminUsers.includes(lowerUser);
+      
+      return resolve({
+        username: cleanUser,
+        displayName: cleanUser.charAt(0).toUpperCase() + cleanUser.slice(1),
+        email: `${cleanUser}${process.env.AD_DOMAIN_SUFFIX || '@scout.local'}`,
+        groups: isAdmin ? ['ServerScout-Admins'] : ['ServerScout-Readers'],
+        canWrite: isAdmin
+      });
+    }
+
+    // 2. Local Mock LDAP Mode
     if (process.env.AD_MOCK === 'true') {
       const lowerUser = cleanUser.toLowerCase();
       if (lowerUser === 'adminuser' || lowerUser === 'admin') {
