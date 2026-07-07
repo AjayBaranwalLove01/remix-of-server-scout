@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState, useCallback } from "react";
 import {
   Server as ServerIcon,
   FileText,
@@ -10,6 +10,7 @@ import {
   X,
   AlertCircle,
   Loader2,
+  ChevronDown,
 } from "lucide-react";
 import type { Server } from "@/types/server";
 import { useServerStore } from "@/store/serverStore";
@@ -175,6 +176,44 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function formatBuildDate(dateVal: string | null | undefined): string {
+  if (!dateVal) return "—";
+  try {
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return dateVal;
+    
+    const day = d.getDate();
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+    
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    
+    return `${day} ${month} ${year} ${hh}:${mm}:${ss}`;
+  } catch (e) {
+    return dateVal;
+  }
+}
+
+function formatSupportEndDate(dateVal: string | null | undefined): string {
+  if (!dateVal) return "—";
+  try {
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return dateVal;
+    
+    const day = d.getDate();
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+    
+    return `${day} ${month} ${year}`;
+  } catch (e) {
+    return dateVal;
+  }
+}
+
 export function ServerDetailPanel({
   server,
   stageEdit,
@@ -188,9 +227,92 @@ export function ServerDetailPanel({
 }) {
   const groups = useServerStore((s) => s.groups);
   const allServers = useServerStore((s) => s.servers);
+  const statusTypes = useServerStore((s) => s.statusTypes);
+  const fetchStatusTypes = useServerStore((s) => s.fetchStatusTypes);
+  const patchCategories = useServerStore((s) => s.patchCategories);
+  const patchSequences = useServerStore((s) => s.patchSequences);
+  const serverDomains = useServerStore((s) => s.serverDomains);
+  const engineers = useServerStore((s) => s.engineers);
+  const dropdownsLoaded = useServerStore((s) => s.dropdownsLoaded);
+  const fetchDropdownMasters = useServerStore((s) => s.fetchDropdownMasters);
+
   const canWrite = useAuthStore((s) => s.user?.canWrite ?? false);
   const { locations, os: osList, loaded: mastersLoaded, fetchAll: fetchMasters } = useMastersStore();
   useEffect(() => { if (!mastersLoaded) fetchMasters(); }, [mastersLoaded, fetchMasters]);
+  useEffect(() => { if (statusTypes.length === 0) fetchStatusTypes(); }, [statusTypes, fetchStatusTypes]);
+  useEffect(() => { if (!dropdownsLoaded) fetchDropdownMasters(); }, [dropdownsLoaded, fetchDropdownMasters]);
+
+  // Cache state for ServiceNow group managers and team members
+  const [groupDetailsCache, setGroupDetailsCache] = useState<Record<string, {
+    manager: { sys_id: string; name: string } | null;
+    members: { sys_id: string; name: string }[];
+    loading: boolean;
+  }>>({});
+
+  // Collapsed support groups panels
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  const fetchGroupDetails = useCallback(async (groupId: string) => {
+    if (!groupId) return;
+    if (groupDetailsCache[groupId]) return; // already fetched/fetching
+
+    setGroupDetailsCache((prev) => ({
+      ...prev,
+      [groupId]: { manager: null, members: [], loading: true }
+    }));
+
+    try {
+      const token = useAuthStore.getState().token;
+      const res = await fetch(`/api/groups/${groupId}/members`, {
+        headers: token ? { "Authorization": `Bearer ${token}` } : {}
+      });
+      if (!res.ok) throw new Error("Failed to fetch group details");
+      const data = await res.json();
+      
+      setGroupDetailsCache((prev) => ({
+        ...prev,
+        [groupId]: {
+          manager: data.manager,
+          members: data.members || [],
+          loading: false
+        }
+      }));
+    } catch (err) {
+      console.error(`Failed to load details for ServiceNow group ${groupId}:`, err);
+      setGroupDetailsCache((prev) => ({
+        ...prev,
+        [groupId]: { manager: null, members: [], loading: false }
+      }));
+    }
+  }, [groupDetailsCache]);
+
+  // Auto-fetch details for primary group
+  useEffect(() => {
+    if (server.primaryGroupId && !groupDetailsCache[server.primaryGroupId]) {
+      fetchGroupDetails(server.primaryGroupId);
+    }
+  }, [server.primaryGroupId, fetchGroupDetails, groupDetailsCache]);
+
+  // Auto-fetch details for affected groups
+  useEffect(() => {
+    (server.affectedGroups || []).forEach((ag) => {
+      if (ag.groupId && !groupDetailsCache[ag.groupId]) {
+        fetchGroupDetails(ag.groupId);
+      }
+    });
+  }, [server.affectedGroups, fetchGroupDetails, groupDetailsCache]);
+
+  const toggleCollapseGroup = (groupId: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  };
 
   const primaryGroup = groups.find((g) => g.id === server.primaryGroupId);
   const activeLocations = locations.filter((l) => !l.status || l.status === "Active" || l.location_name === server.location);
@@ -208,7 +330,7 @@ export function ServerDetailPanel({
   };
 
   const availableForAdd = groups.filter(
-    (g) => g.id !== server.primaryGroupId && !server.affectedGroups.some((a) => a.groupId === g.id)
+    (g) => !server.affectedGroups.some((a) => a.groupId === g.id)
   );
 
   const addAffected = (groupId: string) => {
@@ -339,7 +461,7 @@ export function ServerDetailPanel({
           </Field>
           <Field label="OS Support Ends">
             <span className="text-sm font-mono text-muted-foreground">
-              {server.osSupportEnds || "—"}
+              {formatSupportEndDate(server.osSupportEnds)}
             </span>
             <p className="text-[10px] text-muted-foreground mt-0.5">Auto-filled from OS Master</p>
           </Field>
@@ -353,18 +475,18 @@ export function ServerDetailPanel({
             <InlineSelect
               value={server.status}
               onSave={(v) => stageEdit({ status: v as Server["status"] })}
-              options={[
-                { value: "Active", label: "Active" },
-                { value: "Down", label: "Down" },
-                { value: "Maintenance", label: "Maintenance" },
-              ]}
+              options={statusTypes.map((st) => ({ value: st, label: st }))}
             />
           </Field>
           <Field label="Network">
             <InlineText value={server.network} onSave={(v) => stageEdit({ network: v })} />
           </Field>
           <Field label="Domain">
-            <InlineText value={server.sdomain} onSave={(v) => stageEdit({ sdomain: v })} />
+            <InlineSelect
+              value={server.sdomain}
+              onSave={(v) => stageEdit({ sdomain: v })}
+              options={serverDomains.map(d => ({ value: d, label: d }))}
+            />
           </Field>
           <Field label="Is Patched">
             <InlineToggle value={server.isPatched} onSave={(v) => stageEdit({ isPatched: v })} />
@@ -379,13 +501,22 @@ export function ServerDetailPanel({
       <Section title="Summary Details" icon={<FileText className="w-4 h-4" />} accent="info">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-4">
           <Field label="Build Date">
-            <InlineText type="date" value={server.buildDate} onSave={(v) => stageEdit({ buildDate: v })} />
+            <InlineText
+              type="date"
+              value={server.buildDate ? new Date(server.buildDate).toISOString().split('T')[0] : ""}
+              onSave={(v) => stageEdit({ buildDate: v })}
+              display={() => formatBuildDate(server.buildDate)}
+            />
           </Field>
           <Field label="Business Function">
             <InlineText value={server.businessFunction} onSave={(v) => stageEdit({ businessFunction: v })} />
           </Field>
           <Field label="Patch Sequence">
-            <InlineText value={server.patchSequence} onSave={(v) => stageEdit({ patchSequence: v })} />
+            <InlineSelect
+              value={server.patchSequence}
+              onSave={(v) => stageEdit({ patchSequence: v })}
+              options={patchSequences.map(s => ({ value: s, label: s }))}
+            />
           </Field>
           <Field label="Maintenance Day">
             <InlineSelect
@@ -399,7 +530,11 @@ export function ServerDetailPanel({
             <InlineText type="time" value={server.time} onSave={(v) => stageEdit({ time: v })} />
           </Field>
           <Field label="Build Engineer">
-            <InlineText value={server.buildEngineer} onSave={(v) => stageEdit({ buildEngineer: v })} />
+            <InlineSelect
+              value={server.buildEngineer}
+              onSave={(v) => stageEdit({ buildEngineer: v })}
+              options={engineers.map(e => ({ value: e, label: e }))}
+            />
           </Field>
           <Field label="Alive">
             <InlineToggle value={server.alive} onSave={(v) => stageEdit({ alive: v })} />
@@ -419,12 +554,12 @@ export function ServerDetailPanel({
             <InlineSelect
               value={server.patchCategory}
               onSave={(v) => stageEdit({ patchCategory: v })}
-              options={["Critical","Important","Standard","Optional"].map((c) => ({ value: c, label: c }))}
+              options={patchCategories.map((c) => ({ value: c, label: c }))}
             />
           </Field>
           <Field label="Last Collated">
             <span className="font-mono text-xs text-muted-foreground">
-              {new Date(server.lastCollated).toLocaleString()}
+              {formatBuildDate(server.lastCollated)}
             </span>
           </Field>
           <Field label="View Software Installed">
@@ -461,7 +596,11 @@ export function ServerDetailPanel({
             <InlineText value={server.patchContact} onSave={(v) => stageEdit({ patchContact: v })} />
           </Field>
           <Field label="Design Engineer">
-            <InlineText value={server.designEngineer} onSave={(v) => stageEdit({ designEngineer: v })} />
+            <InlineSelect
+              value={server.designEngineer}
+              onSave={(v) => stageEdit({ designEngineer: v })}
+              options={engineers.map(e => ({ value: e, label: e }))}
+            />
           </Field>
         </div>
         <div className="mt-5">
@@ -472,117 +611,152 @@ export function ServerDetailPanel({
       </Section>
 
       {/* Support Information */}
+      {/* Support Information */}
       <Section title="Support Information" icon={<Users className="w-4 h-4" />} accent="warning">
         <div className="space-y-6">
-          {/* Primary group */}
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-              Primary Assignee Group
+          {/* Primary Group & Assignee */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Primary Assignee Group & Assignee
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-lg bg-accent-soft/40 border border-accent/20">
+            <div className="p-4 rounded-lg bg-accent-soft/30 border border-accent/20 space-y-4">
               <Field label="Currently Assigned Group">
                 <select
                   value={server.primaryGroupId}
-                  onChange={(e) => stageEdit({ primaryGroupId: e.target.value })}
+                  onChange={(e) => {
+                    stageEdit({ 
+                      primaryGroupId: e.target.value,
+                      assignee: "" // reset assignee on group change
+                    });
+                  }}
                   disabled={!canWrite}
-                  className="h-9 w-full px-2 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-70 disabled:cursor-not-allowed"
+                  className="h-9 w-full px-2.5 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-70 disabled:cursor-not-allowed"
                 >
+                  <option value="" disabled>Select Primary Group...</option>
                   {groups.map((g) => (
                     <option key={g.id} value={g.id}>{g.name}</option>
                   ))}
                 </select>
               </Field>
-              <Field label="Team Manager">
-                <span className="inline-flex items-center gap-2">
-                  <span className="w-7 h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[11px] font-semibold">
-                    {primaryGroup?.manager.split(" ").map((n) => n[0]).join("")}
-                  </span>
-                  <span className="font-medium">{primaryGroup?.manager}</span>
-                </span>
-              </Field>
-              <Field label="Team Members">
-                <div className="flex flex-wrap gap-1.5">
-                  {primaryGroup?.members.map((m) => (
-                    <span key={m} className="px-2 py-0.5 text-xs rounded-full bg-card border border-border text-foreground">
-                      {m}
-                    </span>
-                  ))}
+
+              {server.primaryGroupId && (
+                <div className="mt-4 pt-3 border-t border-accent/15 space-y-3">
+                  {(() => {
+                    const details = groupDetailsCache[server.primaryGroupId];
+                    if (!details || details.loading) {
+                      return (
+                        <div className="flex items-center justify-center py-4 gap-2 text-sm text-muted-foreground">
+                          <Loader2 className="w-4 h-4 animate-spin text-accent" />
+                          <span>Loading team members...</span>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-3">
+                        {/* Group Name & Manager */}
+                        <div className="flex flex-col gap-1.5">
+                          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                            Group Manager
+                          </span>
+                          {details.manager ? (
+                            <div className="flex items-center justify-between p-2.5 rounded-md border border-border bg-card text-sm">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-foreground">👤 {details.manager.name}</span>
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 font-bold uppercase tracking-wider">
+                                  Manager
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-xs italic text-muted-foreground">
+                              No manager assigned to this group
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Divider */}
+                        <div className="h-px bg-accent/15 my-2" />
+
+                        {/* Team Members */}
+                        <div className="space-y-2">
+                          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                            Team Members
+                          </span>
+                          {details.members.length === 0 ? (
+                            <div className="text-sm text-muted-foreground py-2 italic">
+                              No team members found
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {details.members.map((m) => (
+                                <div
+                                  key={m.sys_id}
+                                  className="flex items-center p-2.5 rounded-md border border-border bg-card text-sm text-muted-foreground"
+                                >
+                                  <span>{m.name}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
-              </Field>
+              )}
             </div>
           </div>
 
-          {/* Affected groups */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
+          {/* Affected Support Groups */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Affected Support Groups
               </p>
               {canWrite && (
-                <div className="flex items-center gap-2">
-                  <select
-                    defaultValue=""
-                    onChange={(e) => { addAffected(e.target.value); e.currentTarget.value = ""; }}
-                    className="h-8 px-2 text-xs rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30"
-                  >
-                    <option value="" disabled>+ Add available group...</option>
-                    {availableForAdd.map((g) => (
-                      <option key={g.id} value={g.id}>{g.name}</option>
-                    ))}
-                  </select>
-                </div>
+                <select
+                  defaultValue=""
+                  onChange={(e) => { addAffected(e.target.value); e.currentTarget.value = ""; }}
+                  className="h-8 px-2.5 text-xs rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30"
+                >
+                  <option value="" disabled>+ Add affected group...</option>
+                  {availableForAdd.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
               )}
             </div>
 
             {server.affectedGroups.length === 0 ? (
               <div className="text-center text-sm text-muted-foreground py-8 border border-dashed border-border rounded-lg">
-                No affected groups. Use the dropdown to add one.
+                No affected support groups selected.
               </div>
             ) : (
               <div className="space-y-3">
                 {server.affectedGroups.map((a) => {
                   const g = groups.find((gg) => gg.id === a.groupId);
                   if (!g) return null;
+
+                  const isCollapsed = collapsedGroups.has(a.groupId);
+                  const details = groupDetailsCache[a.groupId];
+
                   return (
-                    <div key={a.groupId} className="rounded-lg border border-border bg-card p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-semibold text-foreground">{g.name}</span>
-                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                              Manager: {g.manager}
-                            </span>
-                          </div>
-                          <div className="mt-3">
-                            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
-                              Team Members
-                            </p>
-                            <div className="flex flex-wrap gap-1.5">
-                              {g.members.map((m) => {
-                                const selected = a.selectedMembers.includes(m);
-                                return (
-                                  <button
-                                    key={m}
-                                    onClick={() => toggleAffectedMember(g.id, m)}
-                                    disabled={!canWrite}
-                                    className={cn(
-                                      "px-2.5 py-1 text-xs rounded-full border transition-colors flex items-center gap-1",
-                                      selected
-                                        ? "bg-accent text-accent-foreground border-accent"
-                                        : "bg-card text-muted-foreground border-border hover:border-accent hover:text-foreground"
-                                    )}
-                                  >
-                                    {selected && <Plus className="w-3 h-3 rotate-45" />}
-                                    {m}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </div>
+                    <div key={a.groupId} className="rounded-lg border border-border bg-card overflow-hidden transition-all">
+                      {/* Collapsible Header */}
+                      <div className="flex items-center justify-between px-4 py-3 bg-muted/40 border-b border-border">
+                        <button
+                          type="button"
+                          onClick={() => toggleCollapseGroup(a.groupId)}
+                          className="flex items-center gap-2 text-sm font-semibold text-foreground hover:text-accent transition-colors"
+                        >
+                          <ChevronDown className={cn("w-4 h-4 transition-transform", isCollapsed && "transform -rotate-90")} />
+                          <span>{g.name}</span>
+                        </button>
                         {canWrite && (
                           <button
-                            onClick={() => removeAffected(g.id)}
+                            type="button"
+                            onClick={() => removeAffected(a.groupId)}
                             className="text-muted-foreground hover:text-destructive p-1 rounded hover:bg-destructive/10 transition-colors"
                             title="Remove group"
                           >
@@ -590,6 +764,66 @@ export function ServerDetailPanel({
                           </button>
                         )}
                       </div>
+
+                      {/* Collapsible Body */}
+                      {!isCollapsed && (
+                        <div className="p-4 space-y-3">
+                          {(() => {
+                            if (!details || details.loading) {
+                              return (
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />
+                                  <span>Loading members...</span>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div className="space-y-3">
+                                {/* Manager */}
+                                {details.manager ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-semibold text-foreground">👤 {details.manager.name}</span>
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-bold uppercase tracking-wider">
+                                      Manager
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="text-xs italic text-muted-foreground">
+                                    No manager assigned
+                                  </div>
+                                )}
+
+                                {/* Divider */}
+                                <div className="h-px bg-border my-2" />
+
+                                {/* Team Members List */}
+                                <div className="space-y-2">
+                                  <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                    Team Members
+                                  </span>
+                                  {details.members.length === 0 ? (
+                                    <div className="text-xs text-muted-foreground italic py-1">
+                                      No team members found
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {details.members.map((m) => (
+                                        <span
+                                          key={m.sys_id}
+                                          className="px-2.5 py-1 text-xs rounded-full border border-border bg-card text-muted-foreground"
+                                        >
+                                          {m.name}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

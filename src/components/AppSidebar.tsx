@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { toast } from "sonner";
+import { useAuthStore } from "@/store/authStore";
 
 import {
   Sidebar,
@@ -74,6 +75,8 @@ export function AppSidebar() {
     </SidebarGroup>
   );
 
+  const logout = useAuthStore((s) => s.logout);
+
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
       <SidebarHeader className="h-16 border-b border-sidebar-border">
@@ -103,7 +106,10 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton
               tooltip="Logout"
-              onClick={() => toast.info("Logout coming soon")}
+              onClick={() => {
+                logout();
+                toast.success("Logged out successfully");
+              }}
               className="text-sidebar-foreground hover:text-sidebar-accent-foreground"
             >
               <LogOut className="h-4 w-4" />

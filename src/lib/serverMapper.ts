@@ -1,4 +1,5 @@
 import type { Server, AffectedGroup, SupportGroup, ServerStatus, Priority, YesNo, Essential8 } from "@/types/server";
+import { useServerStore } from "@/store/serverStore";
 
 function idToSno(id: unknown): number {
   const text = String(id ?? "");
@@ -11,15 +12,32 @@ function idToSno(id: unknown): number {
 export function rowToServer(r: any): Server {
   let affected: AffectedGroup[] = [];
   
-  // Safely handle AffectedGroups from SQL Server (as JSON string or array)
+  // Safely handle AffectedGroups from SQL Server (as JSON string, array, or semicolon-separated string)
   const rawAffected = r.AffectedGroups ?? r.affected_groups;
   if (Array.isArray(rawAffected)) {
     affected = rawAffected;
   } else if (typeof rawAffected === "string" && rawAffected.trim()) {
-    try {
-      affected = JSON.parse(rawAffected);
-    } catch {
-      affected = [];
+    if (rawAffected.trim().startsWith("[")) {
+      try {
+        affected = JSON.parse(rawAffected);
+      } catch {
+        affected = [];
+      }
+    } else {
+      // Semicolon-separated group names (e.g. "Windows System;Unix Systems Linux")
+      const names = rawAffected.split(';').map((n: string) => n.trim()).filter(Boolean);
+      try {
+        const allGroups = useServerStore.getState().groups || [];
+        affected = names.map((name: string) => {
+          const match = allGroups.find((g) => g.name.toLowerCase() === name.toLowerCase());
+          return {
+            groupId: match ? match.id : name, // fallback to name string if groups not loaded yet
+            selectedMembers: []
+          };
+        });
+      } catch {
+        affected = names.map((name: string) => ({ groupId: name, selectedMembers: [] }));
+      }
     }
   }
 
@@ -67,7 +85,8 @@ export function rowToServer(r: any): Server {
     patchContact: r.Contact ?? r.patch_contact ?? "",
     patchNotes: r.patch_notes ?? r.patchNotes ?? "",
     designEngineer: r.ProjEng ?? r.design_engineer ?? "",
-    primaryGroupId: r.primary_group_id ?? r.primaryGroupId ?? "",
+    primaryGroupId: r.PrimaryAssigneeGroup ?? r.primary_group_id ?? r.primaryGroupId ?? "",
+    assignee: r.Assignee ?? r.assignee ?? "",
     affectedGroups: affected,
     ping: r.pingcheck ?? r.ping ?? "",
     primaryAssigneeManager: r.PrimaryAssigneeManagerName ?? r.primaryAssigneeManager ?? "",
@@ -136,6 +155,7 @@ export function emptyServer(sno: number): Server {
     patchNotes: "",
     designEngineer: "",
     primaryGroupId: "",
+    assignee: "",
     affectedGroups: [],
     updatedAt: new Date().toISOString(),
   };

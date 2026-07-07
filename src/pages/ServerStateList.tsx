@@ -51,7 +51,7 @@ export default function ServerStateList() {
         });
         if (!res.ok) throw new Error("Failed to fetch servers");
         const data = await res.json();
-        const mapped = (data.data || []).map(rowToServer);
+        const mapped = (data.servers || []).map(rowToServer);
         setServers(mapped);
       } catch (err: any) {
         toast.error(`Error: ${err.message || "Failed to load servers"}`);

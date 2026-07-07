@@ -78,6 +78,8 @@ export function InventoryTable() {
     setPageSize,
     setSorting,
     resetFilters,
+    statusTypes,
+    fetchStatusTypes
   } = useServerStore();
 
   const canWrite = useAuthStore((s) => s.user?.canWrite ?? false);
@@ -94,8 +96,9 @@ export function InventoryTable() {
     if (!loaded) {
       fetchAll();
       fetchFiltersMetadata();
+      fetchStatusTypes();
     }
-  }, [loaded, fetchAll, fetchFiltersMetadata]);
+  }, [loaded, fetchAll, fetchFiltersMetadata, fetchStatusTypes]);
 
   // Sync external search term changes back to local query input
   useEffect(() => {
@@ -256,9 +259,9 @@ export function InventoryTable() {
               className="h-9 px-2 text-sm rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-accent/30"
             >
               <option value="All">All statuses</option>
-              <option value="Active">Active</option>
-              <option value="Down">Down</option>
-              <option value="Maintenance">Maintenance</option>
+              {statusTypes.map((st) => (
+                <option key={st} value={st}>{st}</option>
+              ))}
             </select>
 
             {/* Domain Quick Filter */}
@@ -582,17 +585,16 @@ export function InventoryTable() {
                     </td>
                     <td className="px-3 py-3 text-xs text-muted-foreground">{s.os}</td>
                     <td className="px-3 py-3">
-                      <InlineSelect
-                        value={s.status}
-                        onSave={(v) => stageEdit(s.sno, { status: v as Server["status"] })}
-                        options={[
-                          { value: "Active", label: "Active" },
-                          { value: "Down", label: "Down" },
-                          { value: "Maintenance", label: "Maintenance" },
-                        ]}
-                        className="text-xs"
-                      />
-                      <div className="mt-1"><StatusBadge status={s.status} /></div>
+                      {canWrite ? (
+                        <InlineSelect
+                          value={s.status}
+                          onSave={(v) => stageEdit(s.sno, { status: v as Server["status"] })}
+                          options={statusTypes.map((st) => ({ value: st, label: st }))}
+                          className="text-xs font-semibold"
+                        />
+                      ) : (
+                        <StatusBadge status={s.status} />
+                      )}
                     </td>
                     <td className="px-3 py-3"><PatchedBadge patched={s.isPatched} /></td>
                     <td className="px-3 py-3 text-xs text-muted-foreground max-w-[180px] truncate">{s.location}</td>

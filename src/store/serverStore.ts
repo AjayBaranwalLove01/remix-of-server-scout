@@ -62,6 +62,14 @@ interface ServerStore {
     businessGroups: string[];
   };
 
+  statusTypes: string[];
+
+  patchCategories: string[];
+  patchSequences: string[];
+  serverDomains: string[];
+  engineers: string[];
+  dropdownsLoaded: boolean;
+
   // Dashboard Stats
   dashboardStats: DashboardCounts | null;
   loadingStats: boolean;
@@ -78,6 +86,8 @@ interface ServerStore {
   setSorting: (sortBy: string, sortOrder: "ASC" | "DESC") => void;
   resetFilters: () => void;
 
+  fetchStatusTypes: () => Promise<void>;
+  fetchDropdownMasters: () => Promise<void>;
   fetchAll: () => Promise<void>;
   fetchFiltersMetadata: () => Promise<void>;
   fetchDashboardStats: () => Promise<void>;
@@ -127,6 +137,14 @@ export const useServerStore = create<ServerStore>((set, get) => ({
   total: 0,
   sortBy: "Servername",
   sortOrder: "ASC",
+
+  statusTypes: [],
+
+  patchCategories: [],
+  patchSequences: [],
+  serverDomains: [],
+  engineers: [],
+  dropdownsLoaded: false,
 
   availableFilters: {
     states: [],
@@ -299,6 +317,35 @@ export const useServerStore = create<ServerStore>((set, get) => ({
     } catch (e) {
       console.error("Dashboard stats failed to fetch:", e);
       set({ loadingStats: false });
+    }
+  },
+
+  fetchStatusTypes: async () => {
+    try {
+      const r = await fetch("/api/status-types", { headers: getHeaders() });
+      if (!r.ok) throw new Error("Failed to load status types");
+      const data = await r.json();
+      set({ statusTypes: data });
+    } catch (e) {
+      console.error("Failed to load status types:", e);
+    }
+  },
+
+  fetchDropdownMasters: async () => {
+    if (get().dropdownsLoaded) return;
+    try {
+      const r = await fetch("/api/masters/dropdowns", { headers: getHeaders() });
+      if (!r.ok) throw new Error("Failed to load master dropdowns");
+      const data = await r.json();
+      set({
+        patchCategories: data.patchCategories || [],
+        patchSequences: data.patchSequences || [],
+        serverDomains: data.serverDomains || [],
+        engineers: data.engineers || [],
+        dropdownsLoaded: true
+      });
+    } catch (e) {
+      console.error("Failed to load master dropdowns:", e);
     }
   },
 

@@ -1,4 +1,4 @@
-export type ServerStatus = "Active" | "Down" | "Maintenance";
+export type ServerStatus = string;
 export type Priority = "High" | "Medium" | "Low";
 export type YesNo = "Yes" | "No";
 export type Essential8 = "ML0" | "ML1" | "ML2" | "ML3";
@@ -61,6 +61,7 @@ export interface Server {
 
   // Support
   primaryGroupId: string;
+  assignee: string;
   affectedGroups: AffectedGroup[];
 
   ping?: string;

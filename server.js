@@ -81,6 +81,101 @@ function priorityToDb(p) {
   return 2; // Default to 2 (Medium)
 }
 
+// Helper to resolve and format support groups for database write
+async function resolveGroupInfo(tx, primaryGroupId, affectedGroupsInput, servername) {
+  let primaryGroupFields = {};
+  
+  // 1. Resolve Primary Assignee Group
+  if (primaryGroupId !== undefined) {
+    if (primaryGroupId) {
+      try {
+        const grpRes = await tx.request()
+          .input('grpId', primaryGroupId)
+          .query('SELECT name, manager, email FROM dbo.service_now_group WHERE sys_id = @grpId OR name = @grpId');
+        
+        if (grpRes.recordset.length > 0) {
+          const groupName = grpRes.recordset[0].name || '';
+          const groupEmail = grpRes.recordset[0].email || '';
+          const managerSysId = grpRes.recordset[0].manager;
+          
+          let managerName = '';
+          if (managerSysId) {
+            const mgrRes = await tx.request()
+              .input('mgrSysId', managerSysId)
+              .query('SELECT name FROM dbo.service_now_users WHERE sys_id = @mgrSysId');
+            if (mgrRes.recordset.length > 0) {
+              managerName = mgrRes.recordset[0].name || '';
+            }
+          }
+          
+          primaryGroupFields.PrimaryAssigneeGroup = groupName;
+          primaryGroupFields.PrimaryAssigneeGroupEmail = groupEmail;
+          primaryGroupFields.PrimaryAssigneeManagerName = managerName;
+        }
+      } catch (err) {
+        console.error('Failed to resolve Primary Assignee Group details:', err);
+      }
+    } else {
+      primaryGroupFields.PrimaryAssigneeGroup = '';
+      primaryGroupFields.PrimaryAssigneeGroupEmail = '';
+      primaryGroupFields.PrimaryAssigneeManagerName = '';
+    }
+  }
+
+  // 2. Resolve Affected Support Groups (semicolon-separated names & server_department table inserts)
+  let affectedGroupsStr = null;
+  if (affectedGroupsInput !== undefined) {
+    try {
+      const affectedArr = Array.isArray(affectedGroupsInput) 
+        ? affectedGroupsInput 
+        : (typeof affectedGroupsInput === 'string' ? JSON.parse(affectedGroupsInput || '[]') : []);
+
+      const groupIds = affectedArr.map(ag => ag.groupId).filter(Boolean);
+      
+      let resolvedNames = [];
+      if (groupIds.length > 0) {
+        // Query names and sys_ids of selected groups
+        for (const gid of groupIds) {
+          const res = await tx.request()
+            .input('gid', gid)
+            .query('SELECT sys_id, name FROM dbo.service_now_group WHERE sys_id = @gid OR name = @gid');
+          if (res.recordset.length > 0) {
+            resolvedNames.push({
+              sys_id: res.recordset[0].sys_id,
+              name: res.recordset[0].name
+            });
+          }
+        }
+      }
+
+      affectedGroupsStr = resolvedNames.map(r => r.name).join(';');
+
+      // Save list to server_department table
+      if (servername) {
+        // First delete old mappings
+        await tx.request()
+          .input('sname', servername)
+          .query('DELETE FROM dbo.server_department WHERE server_name = @sname');
+        
+        // Insert new mappings
+        for (const grp of resolvedNames) {
+          await tx.request()
+            .input('deptId', grp.sys_id)
+            .input('sname', servername)
+            .query('INSERT INTO dbo.server_department (dept_id, server_name) VALUES (@deptId, @sname)');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to resolve Affected Support Groups details:', err);
+    }
+  }
+
+  return {
+    primaryGroupFields,
+    affectedGroupsStr
+  };
+}
+
 // ----------------------------------------------------
 // 1. SERVERS ENDPOINTS (with Search, Filters, Sorting, Pagination)
 // ----------------------------------------------------
@@ -303,6 +398,33 @@ app.get('/api/servers/filters', async (req, res) => {
   }
 });
 
+app.get('/api/status-types', async (req, res) => {
+  try {
+    const result = await db.query('SELECT StatusName FROM dbo.StatusTypes ORDER BY StatusName');
+    res.json(result.recordset.map(r => r.StatusName));
+  } catch (err) {
+    handleError(res, err, 'Failed to fetch status types.');
+  }
+});
+
+app.get('/api/masters/dropdowns', async (req, res) => {
+  try {
+    const cats = await db.query('SELECT PCategoryName FROM dbo.PatchCategories ORDER BY PCategoryName');
+    const seqs = await db.query('SELECT PatchSequenceName FROM dbo.PatchSequences ORDER BY PatchSequenceName');
+    const doms = await db.query('SELECT sDomain FROM dbo.ServerDomains ORDER BY sDomain');
+    const engs = await db.query('SELECT ENGINEER FROM dbo.SIMPLE_CML_SIMPLE_ENGINEERS ORDER BY ENGINEER');
+    
+    res.json({
+      patchCategories: cats.recordset.map(r => r.PCategoryName),
+      patchSequences: seqs.recordset.map(r => r.PatchSequenceName),
+      serverDomains: doms.recordset.map(r => r.sDomain),
+      engineers: engs.recordset.map(r => r.ENGINEER)
+    });
+  } catch (err) {
+    handleError(res, err, 'Failed to fetch master dropdowns.');
+  }
+});
+
 app.get('/api/servers/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -426,17 +548,26 @@ app.post('/api/servers', requireWriteAccess, async (req, res) => {
       xsRequest.input('Decommissioned', data.Decommissioned || 'No');
       xsRequest.input('Status', data.status || 'Active');
       xsRequest.input('projeng', data.designEngineer || '');
-      xsRequest.input('PrimaryAssigneeGroup', data.PrimaryAssigneeGroup || '');
-      xsRequest.input('PrimaryAssigneeManagerName', data.PrimaryAssigneeManagerName || '');
-      xsRequest.input('AffectedGroups', JSON.stringify(data.affectedGroups || []));
+      // Resolve groups mapping
+      const { primaryGroupFields, affectedGroupsStr } = await resolveGroupInfo(
+        tx,
+        data.primaryGroupId || data.PrimaryAssigneeGroup,
+        data.affectedGroups,
+        servername
+      );
+
+      xsRequest.input('PrimaryAssigneeGroup', primaryGroupFields.PrimaryAssigneeGroup || '');
+      xsRequest.input('PrimaryAssigneeGroupEmail', primaryGroupFields.PrimaryAssigneeGroupEmail || '');
+      xsRequest.input('PrimaryAssigneeManagerName', primaryGroupFields.PrimaryAssigneeManagerName || '');
+      xsRequest.input('Assignee', data.assignee || data.Assignee || '');
+      xsRequest.input('AffectedGroups', affectedGroupsStr || '');
       xsRequest.input('BusinessGroup', data.BusinessGroup || '');
-      xsRequest.input('PrimaryAssigneeGroupEmail', data.PrimaryAssigneeGroupEmail || '');
 
       const xsSql = `
         INSERT INTO dbo.xSummary 
-        (Servername, MaintenanceDayNew, MaintenanceTimeNew, Priority, PatchCategory, patchcomment, VirtualGuest, Owner, ChangeApprover, Description, Contact, PrimaryFunction, SecondaryFunction, BusinessFunction, Decommissioned, Status, projeng, PrimaryAssigneeGroup, PrimaryAssigneeManagerName, AffectedGroups, BusinessGroup, PrimaryAssigneeGroupEmail)
+        (Servername, MaintenanceDayNew, MaintenanceTimeNew, Priority, PatchCategory, patchcomment, VirtualGuest, Owner, ChangeApprover, Description, Contact, PrimaryFunction, SecondaryFunction, BusinessFunction, Decommissioned, Status, projeng, PrimaryAssigneeGroup, PrimaryAssigneeGroupEmail, PrimaryAssigneeManagerName, Assignee, AffectedGroups, BusinessGroup)
         VALUES
-        (@Servername, @MaintenanceDayNew, @MaintenanceTimeNew, @Priority, @PatchCategory, @patchcomment, @VirtualGuest, @Owner, @ChangeApprover, @Description, @Contact, @PrimaryFunction, @SecondaryFunction, @BusinessFunction, @Decommissioned, @Status, @projeng, @PrimaryAssigneeGroup, @PrimaryAssigneeManagerName, @AffectedGroups, @BusinessGroup, @PrimaryAssigneeGroupEmail)
+        (@Servername, @MaintenanceDayNew, @MaintenanceTimeNew, @Priority, @PatchCategory, @patchcomment, @VirtualGuest, @Owner, @ChangeApprover, @Description, @Contact, @PrimaryFunction, @SecondaryFunction, @BusinessFunction, @Decommissioned, @Status, @projeng, @PrimaryAssigneeGroup, @PrimaryAssigneeGroupEmail, @PrimaryAssigneeManagerName, @Assignee, @AffectedGroups, @BusinessGroup)
       `;
       await xsRequest.query(xsSql);
 
@@ -546,11 +677,38 @@ app.put('/api/servers/:id', requireWriteAccess, async (req, res) => {
       if (data.Decommissioned !== undefined) { xsRequest.input('Decommissioned', data.Decommissioned); xsFields.push('Decommissioned = @Decommissioned'); }
       if (data.status !== undefined) { xsRequest.input('Status', data.status); xsFields.push('Status = @Status'); }
       if (data.designEngineer !== undefined) { xsRequest.input('projeng', data.designEngineer); xsFields.push('projeng = @projeng'); }
-      if (data.PrimaryAssigneeGroup !== undefined) { xsRequest.input('PrimaryAssigneeGroup', data.PrimaryAssigneeGroup); xsFields.push('PrimaryAssigneeGroup = @PrimaryAssigneeGroup'); }
-      if (data.PrimaryAssigneeManagerName !== undefined) { xsRequest.input('PrimaryAssigneeManagerName', data.PrimaryAssigneeManagerName); xsFields.push('PrimaryAssigneeManagerName = @PrimaryAssigneeManagerName'); }
-      if (data.affectedGroups !== undefined) { xsRequest.input('AffectedGroups', JSON.stringify(data.affectedGroups || [])); xsFields.push('AffectedGroups = @AffectedGroups'); }
+      
+      // Resolve groups mapping
+      const { primaryGroupFields, affectedGroupsStr } = await resolveGroupInfo(
+        tx,
+        data.primaryGroupId !== undefined ? data.primaryGroupId : data.PrimaryAssigneeGroup,
+        data.affectedGroups,
+        newServername
+      );
+
+      if (data.primaryGroupId !== undefined || data.PrimaryAssigneeGroup !== undefined) {
+        xsRequest.input('PrimaryAssigneeGroup', primaryGroupFields.PrimaryAssigneeGroup || '');
+        xsFields.push('PrimaryAssigneeGroup = @PrimaryAssigneeGroup');
+
+        xsRequest.input('PrimaryAssigneeGroupEmail', primaryGroupFields.PrimaryAssigneeGroupEmail || '');
+        xsFields.push('PrimaryAssigneeGroupEmail = @PrimaryAssigneeGroupEmail');
+
+        xsRequest.input('PrimaryAssigneeManagerName', primaryGroupFields.PrimaryAssigneeManagerName || '');
+        xsFields.push('PrimaryAssigneeManagerName = @PrimaryAssigneeManagerName');
+      }
+
+      const assignee = data.assignee !== undefined ? data.assignee : data.Assignee;
+      if (assignee !== undefined) {
+        xsRequest.input('Assignee', assignee);
+        xsFields.push('Assignee = @Assignee');
+      }
+
+      if (affectedGroupsStr !== null) {
+        xsRequest.input('AffectedGroups', affectedGroupsStr);
+        xsFields.push('AffectedGroups = @AffectedGroups');
+      }
+
       if (data.BusinessGroup !== undefined) { xsRequest.input('BusinessGroup', data.BusinessGroup); xsFields.push('BusinessGroup = @BusinessGroup'); }
-      if (data.PrimaryAssigneeGroupEmail !== undefined) { xsRequest.input('PrimaryAssigneeGroupEmail', data.PrimaryAssigneeGroupEmail); xsFields.push('PrimaryAssigneeGroupEmail = @PrimaryAssigneeGroupEmail'); }
 
       // Keep track of timestamps
       xsFields.push('RecordUpdate = GETDATE()');
@@ -760,17 +918,54 @@ app.delete('/api/os/:id', requireWriteAccess, async (req, res) => {
 
 app.get('/api/groups', async (req, res) => {
   try {
-    const result = await db.query('SELECT * FROM dbo.support_groups ORDER BY name');
-    // Parse JSON members array for frontend compatibility
-    const groups = result.recordset.map(g => ({
-      id: g.id,
-      name: g.name,
-      manager: g.manager,
-      members: Array.isArray(g.members) ? g.members : (typeof g.members === 'string' ? JSON.parse(g.members || '[]') : [])
-    }));
-    res.json(groups);
+    const result = await db.query('SELECT sys_id AS id, name FROM dbo.service_now_group ORDER BY name');
+    res.json(result.recordset);
   } catch (err) {
     handleError(res, err, 'Failed to fetch support groups.');
+  }
+});
+
+app.get('/api/groups/:id/members', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // 1. Get group manager ID
+    const groupRes = await db.query(
+      'SELECT manager FROM dbo.service_now_group WHERE sys_id = @id OR name = @id',
+      { id }
+    );
+    if (groupRes.recordset.length === 0) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    const managerSysId = groupRes.recordset[0].manager;
+    let manager = null;
+    let members = [];
+
+    if (managerSysId) {
+      // 2. Retrieve manager's profile
+      const managerRes = await db.query(
+        'SELECT sys_id, name FROM dbo.service_now_users WHERE sys_id = @managerSysId',
+        { managerSysId }
+      );
+      if (managerRes.recordset.length > 0) {
+        manager = managerRes.recordset[0];
+      }
+
+      // 3. Retrieve all direct team members
+      const membersRes = await db.query(
+        'SELECT sys_id, name FROM dbo.service_now_users WHERE manager = @managerSysId ORDER BY name ASC',
+        { managerSysId }
+      );
+      members = membersRes.recordset;
+    }
+
+    res.json({
+      manager,
+      members
+    });
+  } catch (err) {
+    handleError(res, err, 'Failed to fetch group members.');
   }
 });
 

@@ -1,32 +1,44 @@
 import { cn } from "@/lib/utils";
 import type { ServerStatus } from "@/types/server";
 
-const styles: Record<ServerStatus, string> = {
-  Active: "bg-status-active/10 text-status-active border-status-active/30",
-  Down: "bg-status-down/10 text-status-down border-status-down/30",
-  Maintenance: "bg-status-maintenance/10 text-status-maintenance border-status-maintenance/30",
-};
-
-const dot: Record<ServerStatus, string> = {
-  Active: "bg-status-active",
-  Down: "bg-status-down",
-  Maintenance: "bg-status-maintenance",
-};
-
 export function StatusBadge({ status, className }: { status: ServerStatus; className?: string }) {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  
+  let badgeStyle = "bg-muted text-muted-foreground border-border";
+  let dotStyle = "bg-muted-foreground";
+  let pulse = false;
+
+  if (normalized === "production" || normalized === "active") {
+    badgeStyle = "bg-emerald-500/10 text-emerald-500 border-emerald-500/30";
+    dotStyle = "bg-emerald-500";
+    pulse = true;
+  } else if (normalized === "down" || normalized === "unknown") {
+    badgeStyle = "bg-red-500/10 text-red-500 border-red-500/30";
+    dotStyle = "bg-red-500";
+  } else if (normalized === "maintenance" || normalized === "build") {
+    badgeStyle = "bg-amber-500/10 text-amber-500 border-amber-500/30";
+    dotStyle = "bg-amber-500";
+  } else if (normalized === "pre-production" || normalized === "development") {
+    badgeStyle = "bg-blue-500/10 text-blue-500 border-blue-500/30";
+    dotStyle = "bg-blue-500";
+  } else if (normalized === "coles-dev" || normalized === "coles-test" || normalized === "lab") {
+    badgeStyle = "bg-purple-500/10 text-purple-500 border-purple-500/30";
+    dotStyle = "bg-purple-500";
+  }
+
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border",
-        styles[status],
+        badgeStyle,
         className
       )}
     >
       <span
         className={cn(
           "w-1.5 h-1.5 rounded-full",
-          dot[status],
-          status === "Active" && "ring-pulse"
+          dotStyle,
+          pulse && "ring-pulse"
         )}
       />
       {status}
